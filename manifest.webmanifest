@@ -1,0 +1,12 @@
+{
+  "name": "Mycel",
+  "short_name": "Mycel",
+  "description": "A connected learning workspace for reading, reflection, projects, and shared inquiry.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F1ECDF",
+  "theme_color": "#94622A",
+  "icons": [
+    { "src": "/favicon.png", "sizes": "64x64", "type": "image/png", "purpose": "any" }
+  ]
+}
