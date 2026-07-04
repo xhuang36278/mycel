@@ -4,19 +4,19 @@ const FONTS = `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@
 
 // â”€â”€ TOKENS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const L = {
-  bg:"#F1ECDF",sf:"#FBF7EF",card:"#FFFDF8",raised:"#E8DDCA",d2:"#EFE6D7",
-  bd:"#D9CDBA",bdS:"#E7DDCF",
-  ink:"#27211A",body:"#4D463A",muted:"#776D5D",faint:"#A69B89",
-  am:"#94622A",amBg:"#94622A12",amBd:"#94622A30",
-  sg:"#557746",sgBg:"#55774612",sgBd:"#55774630",
-  oc:"#2F7883",ocBg:"#2F788312",ocBd:"#2F788330",
+  bg:"#F6F7F3",sf:"#FBFCF9",card:"#FFFFFF",raised:"#EEF1EB",d2:"#F0F2ED",
+  bd:"#DDE2DA",bdS:"#EAEEE8",
+  ink:"#263029",body:"#48534C",muted:"#707970",faint:"#A2AAA2",
+  am:"#6F7954",amBg:"#6F795410",amBd:"#6F795426",
+  sg:"#5D7A62",sgBg:"#5D7A6210",sgBd:"#5D7A6226",
+  oc:"#587B7A",ocBg:"#587B7A10",ocBd:"#587B7A26",
   ru:"#8E3E25",ruBg:"#8E3E2512",ruBd:"#8E3E2530",
   pu:"#675097",puBg:"#67509712",puBd:"#67509730",
   net:"#5A7A48",netBg:"#5A7A4810",netBd:"#5A7A4828",
-  gold:"#BC9438",goldBg:"#BC943812",goldBd:"#BC943830",
+  gold:"#A3824D",goldBg:"#A3824D10",goldBd:"#A3824D26",
   thr:"#A06B2E30",nwm:"#3A7E8C",
-  shadow:"0 18px 54px -34px rgba(80,57,28,0.42),0 2px 10px -6px rgba(80,57,28,0.18)",
-  shadowSoft:"0 10px 28px -22px rgba(80,57,28,0.32),0 1px 4px -2px rgba(80,57,28,0.12)",
+  shadow:"0 12px 32px -26px rgba(38,48,41,0.28)",
+  shadowSoft:"0 4px 16px -14px rgba(38,48,41,0.22)",
 };
 const D = {
   bg:"#0F0C08",sf:"#17130D",card:"#1F1A12",raised:"#272116",d2:"#19150F",
@@ -133,11 +133,15 @@ async function callAI(messages,system,max=1200){
 
 // PDF binaries are kept in IndexedDB so a saved library document survives reloads
 // without overflowing localStorage. Document metadata remains in the normal app store.
+const SUPABASE_URL=(import.meta.env.VITE_SUPABASE_URL||"").replace(/\/$/,"");
+const SUPABASE_KEY=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY||"";
+const cloudFileContext=()=>{try{const session=JSON.parse(localStorage.getItem("mycel-auth-session")||"null");return session?.access_token&&window.__mycelUserId?{token:session.access_token,userId:window.__mycelUserId}:null;}catch{return null;}};
+const cloudFileHeaders=(token,type)=>({apikey:SUPABASE_KEY,Authorization:`Bearer ${token}`,...(type?{"Content-Type":type}:{}),"x-upsert":"true"});
 const fileStore={
   open(){return new Promise((resolve,reject)=>{const req=indexedDB.open("mycel-library",1);req.onupgradeneeded=()=>req.result.createObjectStore("files");req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});},
-  async set(id,blob){const d=await this.open();return new Promise((resolve,reject)=>{const tx=d.transaction("files","readwrite");tx.objectStore("files").put(blob,id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});},
-  async get(id){const d=await this.open();return new Promise((resolve,reject)=>{const req=d.transaction("files").objectStore("files").get(id);req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);});},
-  async del(id){const d=await this.open();return new Promise((resolve,reject)=>{const tx=d.transaction("files","readwrite");tx.objectStore("files").delete(id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});},
+  async set(id,blob){const d=await this.open();await new Promise((resolve,reject)=>{const tx=d.transaction("files","readwrite");tx.objectStore("files").put(blob,id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});const ctx=cloudFileContext();if(ctx&&SUPABASE_URL&&SUPABASE_KEY){window.dispatchEvent(new CustomEvent("mycel:sync",{detail:{state:"syncing"}}));try{const res=await fetch(`${SUPABASE_URL}/storage/v1/object/mycel-files/${ctx.userId}/${id}`,{method:"POST",headers:cloudFileHeaders(ctx.token,blob.type||"application/octet-stream"),body:blob});if(!res.ok)throw new Error(`File sync failed (${res.status})`);window.dispatchEvent(new CustomEvent("mycel:sync",{detail:{state:"synced",at:new Date().toISOString()}}));}catch(error){window.dispatchEvent(new CustomEvent("mycel:sync",{detail:{state:"offline",message:error.message}}));}}},
+  async get(id){const d=await this.open();const local=await new Promise((resolve,reject)=>{const req=d.transaction("files").objectStore("files").get(id);req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);});if(local)return local;const ctx=cloudFileContext();if(!ctx||!SUPABASE_URL||!SUPABASE_KEY)return null;try{const res=await fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/mycel-files/${ctx.userId}/${id}`,{headers:cloudFileHeaders(ctx.token)});if(!res.ok)return null;const blob=await res.blob();const tx=d.transaction("files","readwrite");tx.objectStore("files").put(blob,id);return blob;}catch{return null;}},
+  async del(id){const d=await this.open();await new Promise((resolve,reject)=>{const tx=d.transaction("files","readwrite");tx.objectStore("files").delete(id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});const ctx=cloudFileContext();if(ctx&&SUPABASE_URL&&SUPABASE_KEY)await fetch(`${SUPABASE_URL}/storage/v1/object/mycel-files/${ctx.userId}/${id}`,{method:"DELETE",headers:cloudFileHeaders(ctx.token)}).catch(()=>{});},
 };
 const loadScript=(src,test)=>test()?Promise.resolve():new Promise((resolve,reject)=>{const s=document.createElement("script");s.src=src;s.onload=resolve;s.onerror=reject;document.head.appendChild(s);});
 
@@ -222,7 +226,7 @@ function OnboardScreen({onDone,T}){
   const toggle=f=>setSel(p=>p.find(x=>x.id===f.id)?p.filter(x=>x.id!==f.id):[...p,f]);
   const all=[...UNITS,...custom];
   const results=search.trim()?all.filter(f=>f.label.toLowerCase().includes(search.toLowerCase())||f.code.toLowerCase().includes(search.toLowerCase())):[];
-  const addC=()=>{if(!search.trim())return;const f={id:`cx_${Date.now()}`,code:search.trim().toUpperCase().slice(0,10),label:search.trim().toLowerCase(),icon:"NEW"};setCustom(p=>[...p,f]);toggle(f);setSearch("");};
+  const addC=()=>{if(!search.trim())return;const f={id:`cx_${Date.now()}`,code:search.trim().toUpperCase().slice(0,10),label:search.trim()};setCustom(p=>[...p,f]);toggle(f);setSearch("");};
   return(
     <div style={{minHeight:"100vh",background:T.bg,fontFamily:F.ui,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
       <Logo T={T} size={26}/>
@@ -237,13 +241,12 @@ function OnboardScreen({onDone,T}){
             <div onClick={addC} style={{padding:"8px 12px",borderRadius:7,cursor:"pointer",display:"flex",gap:8,alignItems:"center"}} onMouseEnter={e=>e.currentTarget.style.background=T.raised} onMouseLeave={e=>e.currentTarget.style.background="transparent"}><span style={{color:T.am,fontWeight:700}}>+</span><span style={{fontSize:13,color:T.am}}>Add "{search.trim()}"</span></div>
           </div>}
         </div>
-        {sel.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>{sel.map(f=>(<div key={f.id} onClick={()=>toggle(f)} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",background:T.amBg,border:`1px solid ${T.amBd}`,borderRadius:7,cursor:"pointer"}}><span style={{fontSize:12,fontWeight:500,color:T.ink}}>{f.code}</span><span style={{color:T.am,fontWeight:700}}>x</span></div>))}</div>}
         <div style={{fontFamily:F.mono,fontSize:9,color:T.faint,letterSpacing:"0.2em",marginBottom:10}}>ROSEWORTHY UNITS</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:22}}>
-          {UNITS.map(f=>{const on=sel.find(x=>x.id===f.id);return(<div key={f.id} onClick={()=>toggle(f)} style={{padding:"10px 12px",background:on?T.amBg:T.card,border:`1px solid ${on?T.amBd:T.bd}`,borderRadius:10,cursor:"pointer",transition:"all 0.1s"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}><span style={{fontFamily:F.mono,fontSize:9,color:on?T.am:T.muted}}>{f.code}</span>{on&&<span style={{marginLeft:"auto",color:T.am,fontWeight:700}}>Selected</span>}</div>
+        <div className="unit-picker-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:22}}>
+          {UNITS.map(f=>{const on=sel.find(x=>x.id===f.id);return(<button type="button" aria-pressed={Boolean(on)} key={f.id} onClick={()=>toggle(f)} style={{padding:"12px 13px",background:on?T.amBg:T.card,border:`1px solid ${on?T.am:T.bd}`,borderRadius:8,cursor:"pointer",transition:"background 0.15s,border-color 0.15s",textAlign:"left",fontFamily:F.ui,color:T.ink}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}><span style={{fontFamily:F.mono,fontSize:9,color:on?T.am:T.muted}}>{f.code}</span>{on&&<span aria-hidden="true" style={{marginLeft:"auto",width:18,height:18,borderRadius:"50%",background:T.am,color:"#fff",display:"grid",placeItems:"center",fontSize:11,fontWeight:800}}>✓</span>}</div>
             <div style={{fontSize:12,color:T.ink,fontWeight:500}}>{f.label}</div>
-          </div>);})}
+          </button>);})}
         </div>
         <button onClick={()=>sel.length>0&&onDone({fields:sel,name:name.trim()})} disabled={sel.length===0} style={{width:"100%",padding:"13px",background:sel.length>0?T.am:T.raised,border:"none",borderRadius:11,color:sel.length>0?"#FFF":T.faint,fontSize:15,fontWeight:700,cursor:sel.length>0?"pointer":"not-allowed",transition:"all 0.15s"}}>
           {sel.length===0?"Select at least one unit":`Start with ${sel.length} unit${sel.length>1?"s":""} `}
@@ -279,9 +282,9 @@ function PatternTracker({sessions,T}){
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:10}}>
       {[{l:"Questions",v:totalQ,c:T.am},{l:"Branches",v:totalB,c:T.oc},{l:"Active days",v:streak14,c:T.sg},{l:"Topics",v:sorted.length,c:(T.net||T.sg)}].map(s=>(<div key={s.l} style={{padding:"7px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:8,textAlign:"center"}}><div style={{fontSize:16,fontWeight:700,color:s.c}}>{s.v}</div><div style={{fontFamily:F.mono,fontSize:7,color:T.muted,marginTop:1}}>{s.l}</div></div>))}
     </div>
-    <div style={{display:"flex",gap:2,alignItems:"flex-end",height:36,marginBottom:10}}>
+    {last14.length>=3&&<div style={{display:"flex",gap:3,alignItems:"flex-end",height:36,marginBottom:10}} aria-label="Question activity over recent sessions">
       {last14.map((s,i)=>{const h=Math.max(3,((s.questions||0)/Math.max(...last14.map(x=>x.questions||1),1))*33);return(<div key={i} style={{flex:1,height:h,background:T.amBd,borderRadius:2,cursor:"default"}} title={`${s.date}: ${s.questions||0} Q`} onMouseEnter={e=>e.currentTarget.style.background=T.am} onMouseLeave={e=>e.currentTarget.style.background=T.amBd}/>);})}
-    </div>
+    </div>}
     {sorted.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>{sorted.map(([t,c])=>(<div key={t} style={{padding:"2px 7px",background:T.amBg,border:`1px solid ${T.amBd}`,borderRadius:12}}><span style={{fontSize:10,color:T.body}}>{t}</span><span style={{fontFamily:F.mono,fontSize:8,color:T.muted,marginLeft:4}}>x{c}</span></div>))}</div>}
     {totalB>0&&totalQ>0&&<div style={{fontSize:10,color:T.muted,lineHeight:1.4}}>{((totalB/totalQ)*100).toFixed(0)}% branch rate -- {totalB/(totalQ)*100>30?"deep explorer":"building depth"}</div>}
   </div>);
@@ -328,6 +331,9 @@ function CalStrip({tasks,deadlines,today,selDay,onSel,T}){
 function PreLabScreen({T,setup,graph,survey,onClose,onSaveNote}){
   const[step,setStep]=useState(0); // 0=intro, 1=labname, 2=priming, 3=questions, 4=ready
   const[labName,setLabName]=useState("");
+  const[labAim,setLabAim]=useState("");
+  const[labMaterials,setLabMaterials]=useState("");
+  const[labRisk,setLabRisk]=useState("");
   const[primingText,setPrimingText]=useState("");
   const[userAns,setUserAns]=useState({});
   const[questions,setQuestions]=useState([]);
@@ -337,6 +343,7 @@ function PreLabScreen({T,setup,graph,survey,onClose,onSaveNote}){
   const genPriming=async()=>{
     if(!labName.trim())return;
     setStep(2);setStreamText("");setQBusy(true);
+    if(!AI_ENABLED){const fallback=`MECHANISM TO TRACE\nWrite the process that links your intervention or independent variable to the outcome you will measure.\n\nWHAT TO WATCH\nRecord direction, magnitude, timing, and any observation that does not fit your prediction.\n\nCRITICAL VARIABLES\nSeparate what you change, what you measure, and what must remain controlled.\n\nQUALITY CHECK\nDecide before the lab what result would support your prediction and what would challenge it.`;setPrimingText(fallback);setQuestions(["What is the core mechanism being tested?","What do you predict will happen and why?","What observation would make you reconsider your explanation?"]);setStreamText(fallback);setQBusy(false);setStep(3);return;}
     const sys=buildSys(setup?.fields||[],graph,setup?.name,survey);
     let acc="";
     try{
@@ -354,8 +361,8 @@ function PreLabScreen({T,setup,graph,survey,onClose,onSaveNote}){
   };
 
   const saveAndClose=()=>{
-    if(Object.values(userAns).some(a=>a.trim())){
-      const noteText=`PRE-LAB: ${labName}\n\n${primingText}\n\nMY ANSWERS:\n${Object.entries(userAns).map(([q,a])=>`${q}\n ${a}`).join("\n\n")}`;
+    if(labName.trim()){
+      const noteText=`PRE-LAB: ${labName}\n\nAIM:\n${labAim}\n\nMATERIALS / METHOD CONTEXT:\n${labMaterials}\n\nSAFETY OR QUALITY RISKS:\n${labRisk}\n\n${primingText}\n\nMY PREDICTIONS:\n${Object.entries(userAns).map(([q,a])=>`${q}\n${a}`).join("\n\n")}`;
       onSaveNote({text:noteText,title:`Pre-lab: ${labName}`,template:"labprep"});
     }
     onClose();
@@ -365,12 +372,9 @@ function PreLabScreen({T,setup,graph,survey,onClose,onSaveNote}){
     <div style={{position:"fixed",inset:0,background:T.bg,zIndex:200,display:"flex",flexDirection:"column",fontFamily:F.ui}}>
       {/* Header */}
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${T.bd}`,display:"flex",alignItems:"center",gap:12,background:T.sf}}>
-        <div style={{width:32,height:32,borderRadius:8,background:T.sgBg,border:`1px solid ${T.sgBd}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <span style={{fontFamily:F.mono,fontSize:10}}>PRE</span>
-        </div>
         <div>
-          <div style={{fontSize:15,fontWeight:700,color:T.ink}}>Pre-lab primer</div>
-          <div style={{fontFamily:F.mono,fontSize:10,color:T.sg,marginTop:1}}>Understand the mechanism before you walk in</div>
+          <div style={{fontSize:15,fontWeight:700,color:T.ink}}>Prepare for a lab</div>
+          <div style={{fontSize:10,color:T.sg,marginTop:1}}>Context · mechanism · prediction · observation plan</div>
         </div>
         <button onClick={onClose} style={{marginLeft:"auto",background:"none",border:`1px solid ${T.bd}`,borderRadius:8,padding:"5px 12px",fontSize:12,color:T.muted,cursor:"pointer"}}>Close</button>
       </div>
@@ -381,11 +385,10 @@ function PreLabScreen({T,setup,graph,survey,onClose,onSaveNote}){
             <div style={{fontSize:26,fontWeight:700,color:T.ink,letterSpacing:"-0.025em",marginBottom:12,lineHeight:1.2}}>Before you go in,<br/>understand the <em style={{color:T.sg}}>mechanism</em>.</div>
             <p style={{fontSize:15,color:T.body,lineHeight:1.7,marginBottom:28,maxWidth:500}}>Most students arrive at labs knowing the procedure. Mycel will prime you on the underlying biology or chemistry (what you're actually testing and why it matters) so you can observe intelligently instead of just following steps.</p>
             <div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:32}}>
-              {[{icon:"01",t:"Mechanism first",d:"Understand what's actually happening at the molecular or cellular level"},
-                {icon:"02",t:"Predict then observe",d:"Form a prediction before you enter. It makes your observations 10x more meaningful."},
-                {icon:"03",t:"Save your primer",d:"Your pre-lab notes are saved and become the foundation for your post-lab reflection"},
+              {[{t:"Mechanism first",d:"Understand what's actually happening at the molecular or cellular level"},
+                {t:"Predict then observe",d:"Form a prediction before you enter. It makes your observations 10x more meaningful."},
+                {t:"Save your primer",d:"Your pre-lab notes are saved and become the foundation for your post-lab reflection"},
               ].map(f=>(<div key={f.t} style={{display:"flex",gap:12,alignItems:"flex-start"}}>
-                <span style={{color:T.sg,fontSize:16,marginTop:2,flexShrink:0}}>{f.icon}</span>
                 <div><div style={{fontSize:14,fontWeight:600,color:T.ink}}>{f.t}</div><div style={{fontSize:13,color:T.muted,marginTop:2}}>{f.d}</div></div>
               </div>))}
             </div>
@@ -398,6 +401,9 @@ function PreLabScreen({T,setup,graph,survey,onClose,onSaveNote}){
             <div style={{fontSize:20,fontWeight:700,color:T.ink,marginBottom:8}}>What lab are you about to do?</div>
             <p style={{fontSize:14,color:T.muted,marginBottom:20,lineHeight:1.6}}>Name the lab or describe what you'll be doing. The more specific, the better the primer.</p>
             <textarea value={labName} onChange={e=>setLabName(e.target.value)} placeholder="e.g. Soil pH and plant nutrient availability lab, SOIL 2001 Week 4..." rows={3} style={{width:"100%",background:T.card,border:`1px solid ${T.bd}`,borderRadius:11,color:T.ink,fontSize:14,padding:"12px 14px",outline:"none",resize:"vertical",lineHeight:1.7,boxSizing:"border-box",marginBottom:16}}/>
+            <textarea value={labAim} onChange={e=>setLabAim(e.target.value)} placeholder="What question or aim is this lab investigating?" rows={2} style={{width:"100%",background:T.card,border:`1px solid ${T.bd}`,borderRadius:8,color:T.ink,fontSize:13,padding:"10px 12px",outline:"none",resize:"vertical",lineHeight:1.6,boxSizing:"border-box",marginBottom:10}}/>
+            <textarea value={labMaterials} onChange={e=>setLabMaterials(e.target.value)} placeholder="Key materials, method, equipment, or protocol context" rows={2} style={{width:"100%",background:T.card,border:`1px solid ${T.bd}`,borderRadius:8,color:T.ink,fontSize:13,padding:"10px 12px",outline:"none",resize:"vertical",lineHeight:1.6,boxSizing:"border-box",marginBottom:10}}/>
+            <input value={labRisk} onChange={e=>setLabRisk(e.target.value)} placeholder="Safety, contamination, or measurement risks to remember" style={{width:"100%",background:T.card,border:`1px solid ${T.bd}`,borderRadius:8,color:T.ink,fontSize:13,padding:"10px 12px",outline:"none",boxSizing:"border-box",marginBottom:16}}/>
             <button onClick={genPriming} disabled={!labName.trim()} style={{padding:"12px 28px",background:labName.trim()?T.sg:T.raised,border:"none",borderRadius:10,color:labName.trim()?"#FFF":T.faint,fontSize:14,fontWeight:600,cursor:labName.trim()?"pointer":"not-allowed"}}>Prime me</button>
           </div>
         )}
@@ -445,11 +451,13 @@ function PostLabScreen({T,setup,graph,survey,notes,onClose,onSaveNote}){
   const[observation,setObservation]=useState("");
   const[expected,setExpected]=useState("");
   const[surprising,setSurprising]=useState("");
+  const[limitations,setLimitations]=useState("");
+  const[nextQuestion,setNextQuestion]=useState("");
   const[streamText,setStreamText]=useState("");
   const[sBusy,setSBusy]=useState(false);
   const[saved,setSaved]=useState(false);
 
-  const relatedPrelab=notes.find(n=>n.template==="labprep");
+  const relatedPrelab=[...notes].reverse().find(n=>n.template==="labprep");
 
   const analyse=async()=>{
     if(!observation.trim())return;
@@ -467,7 +475,7 @@ function PostLabScreen({T,setup,graph,survey,notes,onClose,onSaveNote}){
   };
 
   const saveAndClose=()=>{
-    const noteText=`POST-LAB REFLECTION\n\nWHAT I OBSERVED:\n${observation}\n\nWHAT I EXPECTED:\n${expected}\n\nWHAT SURPRISED ME:\n${surprising}\n\nMYCEL ANALYSIS:\n${streamText}`;
+    const noteText=`POST-LAB REFLECTION\n\nWHAT I OBSERVED:\n${observation}\n\nWHAT I EXPECTED:\n${expected}\n\nWHAT SURPRISED ME:\n${surprising}\n\nLIMITATIONS / SOURCES OF ERROR:\n${limitations}\n\nNEXT TESTABLE QUESTION:\n${nextQuestion}\n\nMYCEL ANALYSIS:\n${streamText}`;
     onSaveNote({text:noteText,title:"Post-lab reflection",template:"postreflect"});
     setSaved(true);setTimeout(onClose,1200);
   };
@@ -475,7 +483,6 @@ function PostLabScreen({T,setup,graph,survey,notes,onClose,onSaveNote}){
   return(
     <div style={{position:"fixed",inset:0,background:T.bg,zIndex:200,display:"flex",flexDirection:"column",fontFamily:F.ui}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${T.bd}`,display:"flex",alignItems:"center",gap:12,background:T.sf}}>
-        <div style={{width:32,height:32,borderRadius:8,background:T.ocBg,border:`1px solid ${T.ocBd}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:F.mono,fontSize:9}}>POST</span></div>
         <div><div style={{fontSize:15,fontWeight:700,color:T.ink}}>Post-lab reflection</div><div style={{fontFamily:F.mono,fontSize:10,color:T.oc,marginTop:1}}>Connect what you observed to the mechanism</div></div>
         <button onClick={onClose} style={{marginLeft:"auto",background:"none",border:`1px solid ${T.bd}`,borderRadius:8,padding:"5px 12px",fontSize:12,color:T.muted,cursor:"pointer"}}>Close</button>
       </div>
@@ -498,6 +505,8 @@ function PostLabScreen({T,setup,graph,survey,notes,onClose,onSaveNote}){
             {[{val:observation,set:setObservation,label:"What did you observe?",hint:"Describe what actually happened: measurements, colours, reactions, anything notable. Be specific.",rows:4},
               {val:expected,set:setExpected,label:"What did you expect to happen?",hint:"What did your pre-lab primer predict?",rows:2},
               {val:surprising,set:setSurprising,label:"What surprised you (if anything)?",hint:"Anything that didn't match your prediction or seemed unexpected.",rows:2},
+              {val:limitations,set:setLimitations,label:"What limits your confidence?",hint:"Measurement uncertainty, uncontrolled variables, sample size, contamination, or procedural error.",rows:2},
+              {val:nextQuestion,set:setNextQuestion,label:"What would you test next?",hint:"Turn the unresolved part into one specific, testable question.",rows:2},
             ].map(({val,set,label,hint,rows})=>(
               <div key={label} style={{marginBottom:18}}>
                 <div style={{fontSize:14,fontWeight:600,color:T.ink,marginBottom:5}}>{label}</div>
@@ -544,7 +553,11 @@ const HIGHLIGHT_TYPES={
   blue:{label:"Connection",hint:"Links to another concept, unit, or project"},
   coral:{label:"Question",hint:"Confusion, disagreement, or something to revisit"},
 };
-function highlightedReading(text,annotations){
+function highlightedReading(text,annotations,query=""){
+  if(query.trim()){
+    const q=query.trim();const parts=text.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")})`,"gi"));
+    return parts.map((part,i)=>part.toLowerCase()===q.toLowerCase()?<mark className="reader-search-mark" key={i}>{part}</mark>:part);
+  }
   const hs=(annotations||[]).filter(a=>a.type==="highlight"&&a.text).sort((a,b)=>text.indexOf(a.text)-text.indexOf(b.text));
   if(!hs.length)return text;
   const out=[];let pos=0;
@@ -557,7 +570,7 @@ function MonthCalendar({tasks,deadlines,selDay,onSel,T}){
   return <div className="month-calendar"><div className="month-head"><button onClick={()=>move(-1)}>←</button><b>{base.toLocaleDateString("en-AU",{month:"long",year:"numeric"})}</b><button onClick={()=>move(1)}>→</button></div><div className="month-grid">{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(x=><span className="month-dow" key={x}>{x}</span>)}{cells.map((c,i)=>c?<button key={c.ds} className={selDay===c.ds?"selected":""} onClick={()=>onSel(c.ds)}><b>{c.d}</b><span>{tasks.filter(t=>t.due===c.ds&&!t.done).length>0&&<i className="task-dot"/>}{deadlines.some(x=>x.due===c.ds)&&<i className="deadline-dot"/>}</span></button>:<span key={`x${i}`}/>)}</div></div>;
 }
 function PDFViewer({doc,onDelete,onUpdate,T,sysPrompt}){
-  const[open,setOpen]=useState(false);const[sel,setSel]=useState("");const[mode,setMode]=useState("highlight");
+  const[open,setOpen]=useState(false);const[sel,setSel]=useState("");const[selAnchor,setSelAnchor]=useState(null);const[mode,setMode]=useState("highlight");
   const[askQ,setAskQ]=useState("");const[reflTxt,setReflTxt]=useState("");
   const[streamText,setStreamText]=useState("");const[sBusy,setSBusy]=useState(false);
   const[anns,setAnns]=useState(doc.annotations||[]);const[panel,setPanel]=useState("quick");
@@ -566,6 +579,7 @@ function PDFViewer({doc,onDelete,onUpdate,T,sysPrompt}){
   const[flashIndex,setFlashIndex]=useState(0);const[flashFlipped,setFlashFlipped]=useState(false);
   const[intention,setIntention]=useState(doc.readingIntention||"");const[quickBusy,setQuickBusy]=useState(false);
   const[summaryBusy,setSummaryBusy]=useState(false);
+  const[search,setSearch]=useState("");
 
   useEffect(()=>setAnns(doc.annotations||[]),[doc.annotations]);
   const persist=(next,extra={})=>{setAnns(next);onUpdate(doc.id,{annotations:next,...extra});};
@@ -577,7 +591,7 @@ function PDFViewer({doc,onDelete,onUpdate,T,sysPrompt}){
     setSessionRefl("");setClosing(false);setOpen(false);setSel("");
   };
 
-  const handleUp=()=>{const s=window.getSelection();if(!s||s.isCollapsed)return;const t=s.toString().trim();if(t.length>3){setSel(t);setStreamText("");setAskQ("");setReflTxt("");}};
+  const handleUp=()=>{const s=window.getSelection();if(!s||s.isCollapsed)return;const t=s.toString().trim();const range=s.rangeCount?s.getRangeAt(0):null;const root=range?.commonAncestorContainer?.parentElement?.closest?.(".reader-text");let start=(doc.text||"").indexOf(t);if(root&&range){try{const before=range.cloneRange();before.selectNodeContents(root);before.setEnd(range.startContainer,range.startOffset);start=before.toString().length;}catch{}}if(t.length>3){setSel(t);setSelAnchor({start,end:start+t.length,prefix:(doc.text||"").slice(Math.max(0,start-40),start),suffix:(doc.text||"").slice(start+t.length,start+t.length+40)});setStreamText("");setAskQ("");setReflTxt("");}};
 
   const ask=async()=>{
     setSBusy(true);setStreamText("");
@@ -604,8 +618,8 @@ function PDFViewer({doc,onDelete,onUpdate,T,sysPrompt}){
     persist([...anns,ann]);setSel("");setStreamText("");setAskQ("");
   };
 
-  const saveHighlight=()=>{if(!sel)return;persist([...anns,{id:`a_${Date.now()}`,text:sel,type:"highlight",content:"",color:highlightColor,createdAt:new Date().toISOString()}]);setSel("");};
-  const saveNote=()=>{if(!sel||!reflTxt.trim())return;persist([...anns,{id:`a_${Date.now()}`,text:sel,type:"note",content:reflTxt.trim(),createdAt:new Date().toISOString()}]);setSel("");setReflTxt("");};
+  const saveHighlight=()=>{if(!sel)return;persist([...anns,{id:`a_${Date.now()}`,text:sel,type:"highlight",content:"",color:highlightColor,anchor:selAnchor,createdAt:new Date().toISOString()}]);setSel("");setSelAnchor(null);};
+  const saveNote=()=>{if(!sel||!reflTxt.trim())return;persist([...anns,{id:`a_${Date.now()}`,text:sel,type:"note",content:reflTxt.trim(),anchor:selAnchor,createdAt:new Date().toISOString()}]);setSel("");setSelAnchor(null);setReflTxt("");};
   const saveVocabulary=()=>{if(!sel)return;const item={id:`v_${Date.now()}`,term:sel.trim(),definition:vocabDef.trim(),createdAt:new Date().toISOString()};onUpdate(doc.id,{vocabulary:[...(doc.vocabulary||[]),item]});setVocabDef("");setSel("");setPanel("vocab");};
   const removeVocab=id=>onUpdate(doc.id,{vocabulary:(doc.vocabulary||[]).filter(v=>v.id!==id)});
   const removeAnn=id=>persist(anns.filter(a=>a.id!==id));
@@ -620,7 +634,7 @@ function PDFViewer({doc,onDelete,onUpdate,T,sysPrompt}){
         <button className="icon-button" onClick={requestClose} aria-label="Close reader" title="Close reader">←</button>
         <div style={{minWidth:0}}><div className="reader-title">{doc.name}</div><div className="reader-meta">{doc.pageCount?`${doc.pageCount} pages · `:""}{anns.length} saved items</div></div>
       </div>
-      <div style={{display:"flex",gap:8}}><button className="quiet-button" onClick={shareStudyPack}>Share study pack</button>{doc.hasOriginal&&<button className="quiet-button" onClick={openOriginal}>Original file ↗</button>}<button className="primary-button" onClick={requestClose}>Finish reading</button></div>
+      <div className="reader-header-actions"><label className="reader-search"><span>Search</span><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Find in document" aria-label="Search document"/>{search&&<small>{(doc.text?.match(new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"gi"))||[]).length}</small>}</label><button className="quiet-button" onClick={shareStudyPack}>Export study pack</button>{doc.hasOriginal&&<button className="quiet-button" onClick={openOriginal}>Original file ↗</button>}<button className="primary-button" onClick={requestClose}>Finish reading</button></div>
     </header>
     <div className="reader-layout">
       <main className="reader-document" onMouseUp={handleUp}>
@@ -628,7 +642,7 @@ function PDFViewer({doc,onDelete,onUpdate,T,sysPrompt}){
           <div className="reader-kicker">{doc.kind==="pdf"?"PDF STUDY VIEW":"READING"}</div>
           <h1>{doc.name.replace(/\.[^.]+$/,"")}</h1>
           <div className="reader-rule"/>
-          <div className="reader-text">{doc.text?highlightedReading(doc.text,anns):"No selectable text was found. Open the original file to view scanned pages."}</div>
+          <div className="reader-text">{doc.text?highlightedReading(doc.text,anns,search):"No selectable text was found. Open the original file to view scanned pages."}</div>
         </article>
         {sel&&<div className="selection-dock">
           <div className="selection-preview">“{sel.slice(0,150)}{sel.length>150?"…":""}”</div>
@@ -679,7 +693,7 @@ function NoteTemplates({T,onUse}){
   const[filled,setFilled]=useState("");
   const[custom,setCustom]=useState([]);
   const[creating,setCreating]=useState(false);
-  const[newTpl,setNewTpl]=useState({name:"",icon:"NEW",desc:"",s:""});
+  const[newTpl,setNewTpl]=useState({name:"",desc:"",s:""});
   const[msg,setMsg]=useState("");
 
   // Keep filled state independent from sel so it doesn't reset
@@ -688,7 +702,7 @@ function NoteTemplates({T,onUse}){
   const saveCustom=()=>{
     if(!newTpl.name||!newTpl.s)return;
     setCustom(p=>[...p,{id:`cx_${Date.now()}`,...newTpl}]);
-    setCreating(false);setNewTpl({name:"",icon:"NEW",desc:"",s:""});
+    setCreating(false);setNewTpl({name:"",desc:"",s:""});
   };
 
   const all=[...NOTE_TPLS,...custom];
@@ -699,7 +713,7 @@ function NoteTemplates({T,onUse}){
         <button onClick={()=>setCreating(false)} style={{background:"none",border:`1px solid ${T.bd}`,borderRadius:8,padding:"5px 12px",fontSize:12,color:T.muted,cursor:"pointer"}}>Back</button>
         <div style={{fontSize:16,fontWeight:700,color:T.ink}}>Create template</div>
       </div>
-      {[{f:"name",l:"Name",ph:"Template name"},{f:"icon",l:"Icon",ph:"Emoji"},{f:"desc",l:"Description",ph:"What is this template for?"}].map(({f,l,ph})=>(
+      {[{f:"name",l:"Name",ph:"Template name"},{f:"desc",l:"Description",ph:"What is this template for?"}].map(({f,l,ph})=>(
         <div key={f} style={{marginBottom:11}}>
           <div style={{fontFamily:F.mono,fontSize:9,color:T.muted,marginBottom:5}}>{l.toUpperCase()}</div>
           <input value={newTpl[f]||""} onChange={e=>setNewTpl(p=>({...p,[f]:e.target.value}))} placeholder={ph} style={{width:"100%",padding:"9px 13px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:9,color:T.ink,fontSize:14,outline:"none",boxSizing:"border-box"}}/>
@@ -718,7 +732,7 @@ function NoteTemplates({T,onUse}){
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
         <button onClick={()=>{setSel(null);setFilled("");setMsg("");}} style={{background:"none",border:`1px solid ${T.bd}`,borderRadius:8,padding:"5px 12px",fontSize:12,color:T.muted,cursor:"pointer"}}>Back</button>
-        <div style={{fontSize:15,fontWeight:700,color:T.ink}}>{sel.icon} {sel.name}</div>
+        <div style={{fontSize:15,fontWeight:700,color:T.ink}}>{sel.name}</div>
       </div>
       <textarea value={filled} onChange={e=>setFilled(e.target.value)} rows={12} style={{width:"100%",background:T.card,border:`1px solid ${T.bd}`,borderRadius:11,color:T.ink,fontSize:14,padding:"13px 15px",outline:"none",resize:"vertical",lineHeight:1.9,boxSizing:"border-box",marginBottom:12}}/>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -738,7 +752,6 @@ function NoteTemplates({T,onUse}){
       <div style={{fontSize:13,color:T.muted,marginBottom:16}}>Structured frameworks for different study goals: fill in, save to notes, or share with classmates.</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
         {all.map(tpl=>(<div key={tpl.id} onClick={()=>handleSelect(tpl)} style={{padding:"12px 14px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:11,cursor:"pointer",transition:"all 0.1s"}} onMouseEnter={e=>e.currentTarget.style.borderColor=T.amBd} onMouseLeave={e=>e.currentTarget.style.borderColor=T.bd}>
-          <div style={{fontSize:20,marginBottom:7}}>{tpl.icon}</div>
           <div style={{fontSize:13.5,fontWeight:600,color:T.ink,marginBottom:4}}>{tpl.name}</div>
           <div style={{fontSize:12,color:T.muted,lineHeight:1.4}}>{tpl.desc}</div>
           {tpl.id?.startsWith("cx_")&&<div style={{marginTop:6,fontFamily:F.mono,fontSize:8,color:T.am}}>custom</div>}
@@ -935,23 +948,21 @@ body{
 textarea:focus,input:focus,select:focus{border-color:${T.am}!important;box-shadow:0 0 0 3px ${T.amBg};}
 button:focus-visible,a:focus-visible{outline:2px solid ${T.am};outline-offset:2px;}
 button,input,textarea,select{font-family:'Inter',system-ui,sans-serif;}
-button:hover{box-shadow:${T.shadowSoft};}
+button:hover{box-shadow:none;}
 button:disabled:hover{box-shadow:none;}
 input,textarea,select{transition:border-color .15s ease,box-shadow .15s ease,background .15s ease;}
 .mycel-shell{
   background:${T.bg};
 }
 .mycel-header{
-  background:color-mix(in srgb, ${T.sf} 92%, transparent);
-  backdrop-filter:blur(18px) saturate(140%);
-  box-shadow:0 1px 0 ${T.bdS},0 14px 38px -34px rgba(0,0,0,.35);
+  background:color-mix(in srgb, ${T.sf} 96%, transparent);
+  backdrop-filter:blur(12px);
+  box-shadow:none;
 }
 .mycel-sidebar{
-  background:
-    linear-gradient(180deg, color-mix(in srgb, ${T.sf} 96%, ${T.amBg}), ${T.sf}),
-    linear-gradient(90deg, ${T.amBg}, transparent);
+  background:${T.sf};
 }
-.mycel-page{animation:fadeUp .35s ease;}
+.mycel-page{animation:fadeUp .22s ease;}
 .mycel-card{
   background:${T.card};
   border:1px solid ${T.bd};
@@ -959,21 +970,21 @@ input,textarea,select{transition:border-color .15s ease,box-shadow .15s ease,bac
   box-shadow:none;
 }
 .mycel-subnav{
-  background:color-mix(in srgb, ${T.sf} 94%, transparent);
-  backdrop-filter:blur(14px);
+  background:${T.sf};
+  backdrop-filter:none;
 }
 .mycel-hero-thread{
   background:${T.card};
 }
 .mycel-button-primary{
-  background:linear-gradient(135deg, ${T.am}, color-mix(in srgb, ${T.am} 78%, ${T.gold}));
+  background:${T.am};
   color:#fff;
 }
 .empty-state{
-  padding:44px 18px;
-  border:1px dashed ${T.bd};
-  border-radius:8px;
-  background:${T.sf};
+  padding:32px 4px;
+  border:0;
+  border-radius:0;
+  background:transparent;
   color:${T.muted};
   text-align:center;
   line-height:1.7;
@@ -991,6 +1002,12 @@ input,textarea,select{transition:border-color .15s ease,box-shadow .15s ease,bac
 .document-delete{width:40px;border:0;border-left:1px solid ${T.bd};background:${T.sf};color:${T.faint};cursor:pointer;font-size:17px;}
 .reader-overlay{position:fixed;inset:0;z-index:1000;background:${T.bg};color:${T.ink};display:flex;flex-direction:column;font-family:'Inter',sans-serif;}
 .reader-header{height:66px;flex:0 0 66px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;background:${T.sf};border-bottom:1px solid ${T.bd};}
+.daily-pace{display:inline-flex;gap:3px;padding:3px;margin:0 0 18px;background:${T.sf};border:1px solid ${T.bd};border-radius:8px}.daily-pace button{border:0;background:transparent;color:${T.muted};padding:7px 11px;border-radius:6px;font-size:11px;cursor:pointer}.daily-pace button.active{background:${T.card};color:${T.ink};box-shadow:${T.shadowSoft};font-weight:650}.curiosity-companion{padding:22px 0 4px;border-top:1px solid ${T.bd};border-bottom:1px solid ${T.bd};margin-bottom:6px}.curiosity-copy>span{display:block;color:${T.oc};font-size:11px;font-weight:700;margin-bottom:9px}.curiosity-copy h2{font-family:${F.display};font-size:25px;font-weight:470;line-height:1.3;color:${T.ink};margin:0 0 8px;max-width:680px}.curiosity-copy p{font-size:13px;line-height:1.65;color:${T.muted};max-width:600px;margin:0 0 15px}.curiosity-companion textarea{display:block;width:100%;resize:vertical;background:${T.card};border:1px solid ${T.bd};border-radius:7px;padding:12px 13px;color:${T.ink};font:13px/1.6 ${F.ui};outline:none}.curiosity-companion textarea:focus{border-color:${T.oc}}.curiosity-actions{display:flex;justify-content:flex-end;gap:8px;padding:10px 0 14px}.curiosity-actions button{border:1px solid ${T.bd};background:transparent;color:${T.body};border-radius:7px;padding:8px 12px;font-size:11px;cursor:pointer}.curiosity-actions button.keep{background:${T.oc};border-color:${T.oc};color:#fff;font-weight:650}.curiosity-actions button:disabled{opacity:.45;cursor:not-allowed}.last-spark{padding:12px 0 14px;border-top:1px solid ${T.bdS}}.last-spark span{font-size:10px;color:${T.muted}}.last-spark p{margin:5px 0 0;color:${T.body};font-size:12px;line-height:1.55;font-style:italic}.curiosity-companion.gentle .curiosity-copy>span{color:${T.sg}}
+.quick-task-compose{margin:14px 0;padding:12px;background:${T.card};border:1px solid ${T.bd};border-radius:8px}.quick-task-main{display:grid;grid-template-columns:minmax(0,1fr) 150px auto;gap:8px}.quick-task-main input,.quick-task-details input,.quick-task-details textarea,.quick-task-details select{width:100%;padding:10px 11px;background:${T.sf};border:1px solid ${T.bd};border-radius:6px;color:${T.ink};font-size:12px;outline:none}.quick-task-main>button{padding:9px 14px;border:0;border-radius:6px;background:${T.am};color:#fff;font-size:12px;font-weight:650;cursor:pointer}.quick-task-main>button:disabled{opacity:.45}.task-details-toggle{margin-top:8px;border:0;background:none;color:${T.muted};font-size:10px;cursor:pointer}.quick-task-details{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;margin-top:8px}.quick-task-details textarea{resize:vertical}
+.study-pattern-hero{padding:20px;background:${T.card};border:1px solid ${T.bd};border-radius:8px;margin-bottom:18px}.pattern-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.pattern-heading span{font-size:11px;color:${T.sg};font-weight:650}.pattern-heading h2{font:500 25px/1.25 ${F.display};color:${T.ink};margin:5px 0}.pattern-heading>div:last-child{text-align:right}.pattern-heading b{display:block;font-size:28px;color:${T.sg};font-weight:600}.pattern-heading small{font-size:9px;color:${T.muted}}.study-pattern-hero svg{display:block;width:100%;height:auto;margin:4px 0}.pattern-legend{display:flex;justify-content:space-between;gap:20px;border-top:1px solid ${T.bdS};padding-top:11px}.pattern-legend span{font-size:9px;color:${T.muted};white-space:nowrap}.pattern-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}.pattern-legend p{font-size:11px;line-height:1.55;color:${T.body};max-width:430px;text-align:right}
+.live-space>header{display:flex;justify-content:space-between;gap:30px;align-items:flex-start;margin-bottom:22px}.live-space>header span,.live-report>span{font-size:11px;color:${T.oc};font-weight:700}.live-space>header h1,.live-report h2{font:500 34px/1.15 ${F.display};color:${T.ink};margin:6px 0}.live-space>header p{max-width:570px;color:${T.muted};font-size:12px;line-height:1.6}.live-controls{display:flex;flex-direction:column;align-items:flex-end;gap:8px}.live-controls>div{display:flex;border:1px solid ${T.bd};border-radius:6px;padding:2px}.live-controls button{border:0;border-radius:4px;padding:7px 10px;background:transparent;color:${T.muted};font-size:10px;text-transform:capitalize;cursor:pointer}.live-controls button.active{background:${T.raised};color:${T.ink}}.live-controls .start-live{background:${T.oc};color:#fff}.live-controls .end-live{border:1px solid ${T.ruBd};color:${T.ru}}.live-title{width:100%;border:0;border-bottom:1px solid ${T.bd};padding:10px 0;background:transparent;color:${T.ink};font:500 20px ${F.display};outline:none;margin-bottom:14px}.live-layout{display:grid;grid-template-columns:minmax(0,1fr) 280px;border:1px solid ${T.bd};min-height:520px}.live-board{display:flex;flex-direction:column;background:${T.card}}.live-board-head{display:flex;justify-content:space-between;padding:12px 14px;border-bottom:1px solid ${T.bd};font-size:11px;color:${T.muted}}.live-board-head span{color:${T.ru};font-size:9px}.live-board>textarea{flex:1;min-height:390px;border:0;padding:22px;background:${T.card};color:${T.ink};font:14px/1.8 ${F.ui};resize:none;outline:none}.confusion-compose{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-top:1px solid ${T.bd};background:${T.sf}}.confusion-compose p{font-size:10px;color:${T.muted};overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.confusion-compose button,.keynote-compose button,.live-report>button{border:0;border-radius:5px;padding:8px 11px;background:${T.oc};color:#fff;font-size:10px;font-weight:650;cursor:pointer;white-space:nowrap}.confusion-compose button:disabled,.keynote-compose button:disabled{opacity:.4}.live-insight{padding:16px;border-left:1px solid ${T.bd};background:${T.sf};overflow:auto}.live-insight h2{font:500 19px ${F.display};margin-bottom:12px}.live-empty{font-size:11px;line-height:1.6;color:${T.muted}}.live-insight>article{display:grid;grid-template-columns:24px 1fr;gap:8px;padding:10px 0;border-bottom:1px solid ${T.bdS}}.live-insight>article b{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:${T.ocBg};color:${T.oc};font-size:10px}.live-insight>article p{font-size:10px;line-height:1.45;color:${T.body}}.keynote-compose,.keynotes{margin-top:20px;padding-top:15px;border-top:1px solid ${T.bd}}.keynote-compose h3,.keynotes h3,.live-report-grid h3{font-size:11px;color:${T.ink};margin-bottom:8px}.keynote-compose textarea{width:100%;min-height:90px;padding:9px;border:1px solid ${T.bd};border-radius:5px;background:${T.card};color:${T.ink};font-size:11px;line-height:1.5;resize:vertical;margin-bottom:6px}.keynotes p{padding:8px 0;border-bottom:1px solid ${T.bdS};font-size:10px;line-height:1.5;color:${T.body}}.live-report>p{font-size:13px;color:${T.body};line-height:1.65;max-width:650px}.live-report-grid{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin:24px 0}.live-report-grid section{padding-top:14px;border-top:1px solid ${T.bd}}.live-report-grid blockquote,.live-report-grid section>p{display:flex;flex-direction:column;gap:5px;padding:10px 0;border-bottom:1px solid ${T.bdS};font-size:11px;line-height:1.5;color:${T.body}}.live-report-grid blockquote b{color:${T.oc};font-size:9px}
+.simulation-banner{display:flex;gap:8px;padding:9px 11px;margin-bottom:18px;border-left:2px solid ${T.gold};background:${T.goldBg};font-size:10px;color:${T.body}.simulation-banner b{color:${T.gold}}.consent-panel{position:fixed;z-index:1200;inset:50% auto auto 50%;transform:translate(-50%,-50%);width:min(500px,calc(100vw - 28px));padding:22px;background:${T.card};border:1px solid ${T.bd};border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.3)}.consent-panel h2{font:500 24px ${F.display};margin-bottom:8px}.consent-panel p{font-size:12px;line-height:1.6;color:${T.muted};margin-bottom:14px}.consent-panel label{display:flex;gap:8px;font-size:11px;color:${T.body};margin-bottom:16px}.consent-panel>div{display:flex;justify-content:flex-end;gap:7px}.consent-panel button{padding:8px 11px;border:1px solid ${T.bd};border-radius:5px;background:${T.card};color:${T.body};cursor:pointer}.consent-panel button:last-child{background:${T.oc};color:#fff;border-color:${T.oc}}.consent-panel button:disabled{opacity:.4}.participant-strip{display:flex;gap:8px;align-items:center;overflow:auto;padding:10px 0 14px}.participant-strip>div{display:flex;align-items:center;gap:7px;min-width:120px;padding:7px;border:1px solid ${T.bd};border-radius:6px;background:${T.card}}.participant-strip>div>div{width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:${T.raised};color:${T.body};font-size:9px}.participant-strip>div.speaking{border-color:${T.sg}}.participant-strip>div.speaking>div{box-shadow:0 0 0 3px ${T.sgBg}}.participant-strip span{font-size:10px;color:${T.ink}}.participant-strip small{display:block;color:${T.muted};font-size:8px;margin-top:2px}.recording-status{margin-left:auto;color:${T.ru};font-size:9px;white-space:nowrap}.live-lower{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px}.live-lower>section{padding-top:14px;border-top:1px solid ${T.bd}}.live-lower h2{font:500 18px ${F.display};margin-bottom:10px}.live-lower section>p,.chat-message{padding:8px 0;border-bottom:1px solid ${T.bdS};font-size:10px;line-height:1.5;color:${T.body}}.live-lower section>p b,.chat-message b{display:block;color:${T.ink};margin-bottom:2px}.chat-message.review{padding:9px;background:${T.ruBg};border:1px solid ${T.ruBd};border-radius:5px;margin-bottom:6px}.chat-message span{font-size:8px;color:${T.ru}}.chat-message>div{display:flex;gap:5px;margin-top:6px}.chat-message button{border:1px solid ${T.bd};background:${T.card};border-radius:4px;padding:4px 7px;color:${T.body};font-size:8px;cursor:pointer}.chat-compose{display:flex;gap:6px;margin-top:9px}.chat-compose input{flex:1;min-width:0;padding:8px;border:1px solid ${T.bd};border-radius:5px;background:${T.card};color:${T.ink};font-size:10px}.chat-compose button{border:0;border-radius:5px;background:${T.oc};color:#fff;padding:8px 10px;font-size:9px;cursor:pointer}
+.reader-header-actions{display:flex;gap:8px;align-items:center}.reader-search{height:36px;min-width:190px;display:flex;align-items:center;gap:7px;padding:0 9px;border:1px solid ${T.bd};border-radius:7px;background:${T.card}}.reader-search span{font-size:10px;color:${T.muted}}.reader-search input{min-width:0;width:120px;border:0;outline:0;background:transparent;color:${T.ink};font-size:12px}.reader-search small{color:${T.am};font-size:10px}.reader-search-mark{background:#F3D879;color:inherit;border-radius:2px;padding:0 1px}.sync-status{display:flex;align-items:center;gap:6px;color:${T.muted};font-size:10px;white-space:nowrap}.sync-status i{width:7px;height:7px;border-radius:50%;background:${T.faint}}.sync-status.syncing i{background:${T.am};animation:pulse 1s infinite}.sync-status.synced i{background:${T.sg}}.sync-status.offline i{background:${T.ru}}.sync-status.local i{background:${T.oc}}
 .reader-title{font-size:14px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw;}.reader-meta{font:9px 'DM Mono',monospace;color:${T.muted};margin-top:3px;}
 .reader-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;min-height:0;flex:1;}
 .reader-document{overflow:auto;padding:42px 5vw 160px;background:${T.raised};position:relative;}
@@ -1020,18 +1037,31 @@ input,textarea,select{transition:border-color .15s ease,box-shadow .15s ease,bac
 @media(max-width:700px){.hide-mobile{display:none!important;}.mob-nav{display:flex!important;}}
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @keyframes growIn{from{opacity:0;transform:scale(0.97)}to{opacity:1;transform:scale(1)}}
-button{transition:transform 0.12s ease,background 0.15s ease,border-color 0.15s ease,box-shadow 0.15s ease;}
-button:active{transform:scale(0.98);}
+button{transition:background 0.15s ease,border-color 0.15s ease,color .15s ease;}
+button:active{transform:none;}
 body{transition:background 0.3s ease;}
 *{scrollbar-width:thin;}
 @media(max-width:700px){
   body{font-size:15px;}
   .empty-state{padding:34px 14px;}
-  .open-document{display:none}.library-document-main{padding:12px}.reader-header{height:auto;min-height:62px;padding:9px 12px}.reader-header .quiet-button{display:none}.reader-title{max-width:45vw}.reader-layout{display:block;overflow:auto}.reader-document{padding:16px 12px 150px;overflow:visible}.reader-paper{padding:38px 24px;min-height:auto}.reader-text{font-size:15px;line-height:1.75}.reader-sidebar{border:0;border-top:1px solid ${T.bd};min-height:340px}.selection-dock{left:12px;right:12px;bottom:76px;width:auto;transform:none}.selection-tabs{padding-bottom:2px}.selection-compose{align-items:stretch;flex-direction:column}.reader-header .primary-button{padding:8px 10px}.reader-paper h1{font-size:30px;}
+  .open-document{display:none}.library-document-main{padding:12px}.reader-header{height:auto;min-height:62px;padding:9px 12px}.reader-header-actions .quiet-button{display:none}.reader-header-actions{flex:1;justify-content:flex-end}.reader-search{min-width:0;max-width:190px}.reader-title{max-width:30vw}.reader-layout{display:block;overflow:auto}.reader-document{padding:16px 12px 150px;overflow:visible}.reader-paper{padding:38px 24px;min-height:auto}.reader-text{font-size:15px;line-height:1.75}.reader-sidebar{border:0;border-top:1px solid ${T.bd};min-height:340px}.selection-dock{left:12px;right:12px;bottom:76px;width:auto;transform:none}.selection-tabs{padding-bottom:2px}.selection-compose{align-items:stretch;flex-direction:column}.reader-header .primary-button{padding:8px 10px}.reader-paper h1{font-size:30px;}.sync-status span{display:none}
   .project-companion-grid,.project-type-grid,.wizard-fields,.compose-grid,.planner-inputs,.manual-task-fields{grid-template-columns:1fr}.highlight-choices{grid-template-columns:1fr}.project-wizard{padding:18px}.wizard-progress{margin:-18px -18px 18px}.project-detail-head{align-items:flex-start}.project-progress-ring{width:70px;height:70px;flex-basis:70px}.milestone-row{grid-template-columns:28px 1fr}.milestone-row>span{display:none}.project-chat-input{flex-direction:column}.project-chat-input button{padding:9px}.section-row{flex-direction:column}.relational-head{flex-direction:column}.relational-head h1,.thread-detail h1{font-size:27px}.thread-row-foot{align-items:flex-start;flex-direction:column}.thread-author{flex-wrap:wrap}.preview-task{grid-template-columns:1fr}.preview-task>span{text-align:left}.thread-attachments{grid-template-columns:1fr}
+  html,body,#root{min-height:100%;min-height:100dvh;overflow-x:hidden}
+  input,textarea,select{font-size:16px!important}
+  .mycel-page{padding:18px 14px calc(92px + env(safe-area-inset-bottom))!important;max-width:100%!important}
+  .mycel-header{padding-left:12px!important;padding-right:12px!important}
+  .mycel-subnav{flex-wrap:nowrap!important;overflow-x:auto;padding:8px 12px!important;scrollbar-width:none}
+  .mycel-subnav::-webkit-scrollbar{display:none}.mycel-subnav>button{flex:0 0 auto;min-height:38px}
+  .mob-nav{padding-bottom:calc(7px + env(safe-area-inset-bottom))!important}.mob-nav button{min-height:44px}
+  .reader-header{padding-top:calc(9px + env(safe-area-inset-top))}.reader-title{max-width:42vw}.unit-picker-grid{grid-template-columns:1fr!important}.welcome-dialog{padding:22px!important;max-height:calc(100dvh - 24px);overflow:auto}.daily-pace{display:grid;grid-template-columns:1fr 1fr 1fr;width:100%}.daily-pace button{padding:8px 5px;white-space:normal;line-height:1.25}.curiosity-copy h2{font-size:22px}.curiosity-actions{justify-content:stretch}.curiosity-actions button{flex:1}.quick-task-main,.quick-task-details{grid-template-columns:1fr}.quick-task-main input[type=date]{width:100%}.pattern-legend{flex-direction:column;gap:7px}.pattern-legend p{text-align:left}.study-pattern-hero{padding:15px}.live-space>header{flex-direction:column}.live-controls{align-items:flex-start}.live-layout{grid-template-columns:1fr}.live-insight{border-left:0;border-top:1px solid ${T.bd}}.live-report-grid,.live-lower{grid-template-columns:1fr}.confusion-compose{align-items:stretch;flex-direction:column}.confusion-compose p{white-space:normal}.simulation-banner{flex-direction:column}.recording-status{margin-left:0}
+  .reader-side-tabs{position:sticky;top:0;z-index:2;background:${T.sf}}
+  .month-grid button{min-height:46px;padding:5px}.month-dow{font-size:7px}
+  .auth-panel{padding:24px 20px}.auth-panel h1{font-size:28px}
 }
+@media(min-width:701px) and (max-width:1050px){.mycel-sidebar{width:190px!important}.mycel-page{max-width:760px!important;padding-left:18px!important;padding-right:18px!important}.reader-layout{grid-template-columns:minmax(0,1fr) 300px}.reader-paper{padding-left:52px;padding-right:52px}}
+.host-setup-backdrop{position:fixed;z-index:1300;inset:0;display:grid;place-items:center;padding:18px;background:rgba(20,25,21,.62);backdrop-filter:blur(6px)}.host-setup{width:min(760px,100%);max-height:calc(100dvh - 36px);overflow:auto;padding:24px;background:${T.card};border:1px solid ${T.bd};border-radius:8px;box-shadow:0 30px 100px rgba(0,0,0,.3)}.host-setup-head{display:flex;justify-content:space-between;gap:24px;margin-bottom:20px}.host-setup-head span{font-size:10px;color:${T.oc};font-weight:700}.host-setup-head h2{font:500 27px ${F.display};margin:5px 0}.host-setup-head p{max-width:570px;color:${T.muted};font-size:11px;line-height:1.55}.host-setup-head>button{align-self:flex-start;border:0;background:none;color:${T.muted};cursor:pointer}.host-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.host-form-grid label{display:flex;flex-direction:column;gap:5px;color:${T.body};font-size:10px;font-weight:650}.host-form-grid label.wide{grid-column:1/-1}.host-form-grid input,.host-form-grid textarea,.host-form-grid select{width:100%;padding:9px 10px;border:1px solid ${T.bd};border-radius:5px;background:${T.sf};color:${T.ink};font-size:12px;line-height:1.5;outline:none}.host-attest{display:flex;align-items:flex-start;gap:8px;margin:16px 0;color:${T.body};font-size:10px;line-height:1.5}.host-attest input{margin-top:2px}.host-screen-result{padding:10px 12px;margin:12px 0;border-left:3px solid ${T.gold};background:${T.goldBg};font-size:10px}.host-screen-result b{text-transform:capitalize;color:${T.gold}}.host-screen-result p{margin-top:3px;color:${T.body};line-height:1.5}.host-screen-result.approved{border-color:${T.sg};background:${T.sgBg}}.host-screen-result.approved b{color:${T.sg}}.host-screen-result.rejected{border-color:${T.ru};background:${T.ruBg}}.host-screen-result.rejected b{color:${T.ru}}.host-setup-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:16px}.host-setup-actions button{padding:8px 11px;border:1px solid ${T.bd};border-radius:5px;background:${T.card};color:${T.body};font-size:10px;font-weight:650;cursor:pointer}.host-setup-actions button:disabled{opacity:.4;cursor:not-allowed}.host-setup-actions .screen-session{background:${T.oc};border-color:${T.oc};color:#fff}.host-setup-actions .create-room{background:${T.sg};border-color:${T.sg};color:#fff}@media(max-width:700px){.host-form-grid{grid-template-columns:1fr}.host-form-grid label.wide{grid-column:auto}.host-setup{padding:18px}.host-setup-head{flex-direction:column}.host-setup-actions{align-items:stretch;flex-direction:column}.host-setup-actions button{width:100%}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
-`;}
+`.replace("color:"+T.body+".simulation-banner b","color:"+T.body+"}.simulation-banner b");}
 
 
 
@@ -1760,6 +1790,34 @@ function AttachmentPreview({item}){
   if(item.type.startsWith("video/"))return <figure className="thread-media"><video src={url} controls preload="metadata"/><figcaption>{item.name}</figcaption></figure>;
   return <a className="thread-file" href={url} target="_blank" rel="noreferrer"><b>{item.name}</b><span>Open attached document</span></a>;
 }
+function LiveStudySpace({T,sessions,setSessions}){
+  const[role,setRole]=useState("participant"),[live,setLive]=useState(false),[ended,setEnded]=useState(false),[showConsent,setShowConsent]=useState(false),[consented,setConsented]=useState(false),[recording,setRecording]=useState(false);
+  const[showHostSetup,setShowHostSetup]=useState(false),[screening,setScreening]=useState(false),[screenResult,setScreenResult]=useState(null);
+  const[hostForm,setHostForm]=useState({name:"",purpose:"",outcome:"",format:"guided problem solving",audience:"University learners",duration:"45 minutes",capacity:"12",sources:"",moderation:"Host and one co-moderator",recording:"Transcript and room recording",attested:false});
+  const[title,setTitle]=useState("Solving nutrient balance problems"),[board,setBoard]=useState("1. Identify nutrient inputs and outputs\n2. Convert every value to the same unit\n3. Balance = total inputs - total outputs\n4. Interpret whether the system is accumulating or losing nutrients"),[selected,setSelected]=useState(""),[confusions,setConfusions]=useState([]),[note,setNote]=useState(""),[keynotes,setKeynotes]=useState([]),[moment,setMoment]=useState(0);
+  const[transcript,setTranscript]=useState([{id:1,speaker:"Mina (host)",text:"We will keep every quantity in kilograms per hectare before calculating the balance."}]);
+  const[chat,setChat]=useState([{id:1,author:"Arun",text:"Does atmospheric deposition count as an input?",status:"approved"}]),[chatDraft,setChatDraft]=useState("");
+  const participants=[{name:"Mina",role:"Host",initials:"MT",speaking:true},{name:"Arun",role:"Participant",initials:"AR"},{name:"Sofia",role:"Participant",initials:"SO"},{name:"You",role,initials:"YO"}];
+  const scripted=[{speaker:"Mina (host)",text:"Yes. Deposition is an input if it crosses the boundary we defined for the system."},{speaker:"Sofia",text:"I was subtracting fertilizer because the crop removes it later."},{speaker:"Mina (host)",text:"That is the common confusion: classify each flow when it crosses the boundary, not by what might happen afterward."}];
+  const markConfusion=()=>{if(!selected.trim())return;setConfusions(c=>{const found=c.find(x=>x.text===selected.trim());return found?c.map(x=>x.text===found.text?{...x,count:x.count+1}:x):[...c,{id:`cf_${Date.now()}`,text:selected.trim(),count:1}]});setSelected("");};
+  const addKeynote=()=>{if(note.trim()){setKeynotes(k=>[...k,{id:`kn_${Date.now()}`,text:note.trim()}]);setNote("");}};
+  const updateHost=(key,value)=>{setHostForm(f=>({...f,[key]:value}));setScreenResult(null);};
+  const screenHostSession=async()=>{if(!hostForm.name.trim()||!hostForm.purpose.trim()||!hostForm.outcome.trim()||!hostForm.attested)return;setScreening(true);const combined=`${hostForm.name} ${hostForm.purpose} ${hostForm.outcome} ${hostForm.sources}`;let result;if(/cheat|exam answers|harass|hate|dox|password|medical diagnosis|dangerous experiment|sell|paid promotion/i.test(combined))result={decision:"rejected",reason:"The proposal conflicts with Mycel’s safety, privacy, academic-integrity, or non-commercial community rules."};else if(/under 18|minor|children/i.test(hostForm.audience)||Number(hostForm.capacity)>30)result={decision:"review",reason:"This session requires human moderator review because it involves minors or a larger audience."};else result={decision:"approved",reason:"Clear educational purpose, bounded audience, moderation plan, and consent choices are present."};if(AI_ENABLED){try{const raw=await callAI([{role:"user",content:`Screen this proposed educational live session. Reject harassment, personal-data exposure, academic cheating, dangerous instruction, spam, paid solicitation, or copyright abuse. Do not reject legitimate technical debate. JSON only {"decision":"approved|review|rejected","reason":"..."}.\n${JSON.stringify(hostForm)}`}],"You are the safety and learning-quality reviewer for Mycel Live.",250);result=JSON.parse(raw.replace(/```json?|```/g,"").trim());}catch{}}setScreenResult(result);setScreening(false);if(result.decision==="approved")setTitle(hostForm.name.trim());};
+  const start=()=>{if(role==="host"&&screenResult?.decision!=="approved"){setShowHostSetup(true);return;}if(!consented){setShowConsent(true);return;}setLive(true);setRecording(hostForm.recording!=="No recording");};
+  const nextMoment=()=>{const line=scripted[moment%scripted.length];setTranscript(t=>[...t,{id:Date.now(),...line}]);if(moment===1)setConfusions(c=>[...c,{id:`cf_sim_${Date.now()}`,text:"Balance = total inputs - total outputs",count:3}]);setMoment(m=>m+1);};
+  const sendChat=()=>{if(!chatDraft.trim())return;const review=/email|phone|idiot|stupid|cheat|password/i.test(chatDraft);setChat(c=>[...c,{id:Date.now(),author:"You",text:chatDraft.trim(),status:review?"review":"approved"}]);setChatDraft("");};
+  const moderate=(id,status)=>setChat(c=>c.map(m=>m.id===id?{...m,status}:m));
+  const endSession=async()=>{const record={id:`live_${Date.now()}`,date:new Date().toISOString().slice(0,10),createdAt:new Date().toISOString(),questions:confusions.reduce((a,c)=>a+c.count,0),branches:keynotes.length,topics:title.split(/\s+/).filter(x=>x.length>4).slice(0,5),source:"live",transcript,keynotes,attendance:participants.length,consentRecorded:consented};const next=[...sessions,record];setSessions(next);await db.set("mycel_sess7",next);setLive(false);setRecording(false);setEnded(true);};
+  if(ended)return <div className="live-report"><span>Simulated session report</span><h2>{title}</h2><p>{participants.length} attendees · {transcript.length} transcript moments · {confusions.reduce((a,c)=>a+c.count,0)} confusion signals · {keynotes.length} key notes. Recording consent was {consented?"captured":"not captured"}.</p><div className="live-report-grid"><section><h3>Where understanding broke</h3>{confusions.sort((a,b)=>b.count-a.count).map(c=><blockquote key={c.id}><b>{c.count} signals</b>{c.text}</blockquote>)}</section><section><h3>Session synthesis</h3><p>The group’s main difficulty was classifying flows consistently before calculating the balance. The host clarified that system boundaries determine whether a flow is an input or output.</p><h3>Key notes</h3>{keynotes.map(k=><p key={k.id}>{k.text}</p>)}</section><section><h3>Transcript</h3>{transcript.map(x=><p key={x.id}><b>{x.speaker}</b>{x.text}</p>)}</section></div><button onClick={()=>{setEnded(false);setConfusions([]);setKeynotes([]);setTranscript([]);setConsented(false);}}>Prepare another session</button></div>;
+  return <div className="live-space"><div className="simulation-banner"><b>Interactive simulation</b><span>Participants, recording, transcript, synchronization, and moderation are demonstrated locally.</span></div><header><div><span>Live Study</span><h1>Make confusion visible.</h1><p>A shared board for anchored study sessions. Questions stay attached to the exact step that caused them.</p></div><div className="live-controls"><div>{["participant","host"].map(r=><button className={role===r?"active":""} onClick={()=>setRole(r)} key={r}>{r}</button>)}</div>{!live?<button className="start-live" onClick={start}>Enter demo room</button>:<><button onClick={nextMoment}>Simulate next moment</button>{role==="host"&&<button className="end-live" onClick={endSession}>End and report</button>}</>}</div></header>
+    {showHostSetup&&<div className="host-setup-backdrop"><section className="host-setup"><div className="host-setup-head"><div><span>Host application</span><h2>Design a learning session</h2><p>Every Mycel Live session must have a clear learning purpose, bounded audience, moderation plan, and consent choices before a room can be created.</p></div><button onClick={()=>setShowHostSetup(false)}>Close</button></div><div className="host-form-grid"><label>Session name<input value={hostForm.name} onChange={e=>updateHost("name",e.target.value)} placeholder="e.g. Working through soil nutrient balances"/></label><label>Session format<select value={hostForm.format} onChange={e=>updateHost("format",e.target.value)}><option>guided problem solving</option><option>reading circle</option><option>project critique</option><option>exam concept review</option><option>open question workshop</option></select></label><label className="wide">Why should this session exist?<textarea value={hostForm.purpose} onChange={e=>updateHost("purpose",e.target.value)} rows={3} placeholder="Describe the real question, source, project, or learning need behind the session."/></label><label className="wide">What should participants become able to understand or do?<textarea value={hostForm.outcome} onChange={e=>updateHost("outcome",e.target.value)} rows={3} placeholder="Use an observable learning outcome, not a promotional description."/></label><label>Audience<input value={hostForm.audience} onChange={e=>updateHost("audience",e.target.value)} /></label><label>Duration<select value={hostForm.duration} onChange={e=>updateHost("duration",e.target.value)}><option>25 minutes</option><option>45 minutes</option><option>60 minutes</option><option>90 minutes</option></select></label><label>Maximum participants<select value={hostForm.capacity} onChange={e=>updateHost("capacity",e.target.value)}><option>6</option><option>8</option><option>12</option><option>30</option><option>50</option></select></label><label>Recording choice<select value={hostForm.recording} onChange={e=>updateHost("recording",e.target.value)}><option>No recording</option><option>Transcript only</option><option>Transcript and room recording</option></select></label><label className="wide">Sources and material permissions<textarea value={hostForm.sources} onChange={e=>updateHost("sources",e.target.value)} rows={2} placeholder="Name materials, links, ownership, or permission to share them."/></label><label className="wide">Moderation coverage<select value={hostForm.moderation} onChange={e=>updateHost("moderation",e.target.value)}><option>Host moderates</option><option>Host and one co-moderator</option><option>Dedicated moderator</option></select></label></div><label className="host-attest"><input type="checkbox" checked={hostForm.attested} onChange={e=>updateHost("attested",e.target.checked)}/> I will protect participant privacy, respect source permissions, enforce Mycel’s conduct rules, avoid paid solicitation and academic cheating, and obtain explicit recording consent.</label>{screenResult&&<div className={`host-screen-result ${screenResult.decision}`}><b>{screenResult.decision==="approved"?"Preflight approved":screenResult.decision==="review"?"Human review required":"Session rejected"}</b><p>{screenResult.reason}</p></div>}<div className="host-setup-actions"><button onClick={()=>setShowHostSetup(false)}>Cancel</button><button className="screen-session" disabled={screening||!hostForm.name.trim()||!hostForm.purpose.trim()||!hostForm.outcome.trim()||!hostForm.attested} onClick={screenHostSession}>{screening?"Screening session...":"Submit for screening"}</button>{screenResult?.decision==="approved"&&<button className="create-room" onClick={()=>{setShowHostSetup(false);setShowConsent(true);}}>Create approved room</button>}</div></section></div>}
+    {showConsent&&<div className="consent-panel"><h2>Participation and media consent</h2><p>{hostForm.recording==="No recording"?"This session will not be recorded or transcribed. The room will still preserve questions, confusion anchors, and host key notes.":`The host selected: ${hostForm.recording}. In production, participants who do not consent must be kept out of recorded media and transcripts.`}</p><label><input type="checkbox" checked={consented} onChange={e=>setConsented(e.target.checked)}/> I understand the session settings and consent to participate{hostForm.recording!=="No recording"?" under these recording terms":""}.</label><div><button onClick={()=>setShowConsent(false)}>Cancel</button><button disabled={!consented} onClick={()=>{setShowConsent(false);setLive(true);setRecording(hostForm.recording!=="No recording");}}>Consent and enter</button></div></div>}
+    <div className="participant-strip">{participants.map(p=><div key={p.name} className={p.speaking&&live?"speaking":""}><div>{p.initials}</div><span>{p.name}<small>{p.role}</small></span></div>)}{recording&&<b className="recording-status">Recording · transcript on</b>}</div>
+    <input className="live-title" value={title} onChange={e=>setTitle(e.target.value)} disabled={role!=="host"}/><div className="live-layout"><section className="live-board"><div className="live-board-head"><b>Shared problem board</b>{live&&<span>Synced · 4 present</span>}</div><textarea value={board} readOnly={role!=="host"} onChange={e=>setBoard(e.target.value)} onSelect={e=>setSelected(e.target.value.slice(e.target.selectionStart,e.target.selectionEnd))}/>{role==="participant"&&<div className="confusion-compose"><p>{selected?`Selected: “${selected.slice(0,100)}”`:"Select the exact line or step that is confusing."}</p><button onClick={markConfusion} disabled={!live||!selected}>Raise confusion here</button></div>}</section><aside className="live-insight"><h2>Understanding signals</h2>{!confusions.length?<p className="live-empty">Confusion signals will gather here without interrupting the explanation.</p>:confusions.sort((a,b)=>b.count-a.count).map(c=><article key={c.id}><b>{c.count}</b><p>{c.text}</p></article>)}{role==="host"&&<div className="keynote-compose"><h3>Capture a key explanation</h3><textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Preserve the explanation that resolved a common confusion..."/><button onClick={addKeynote} disabled={!note.trim()}>Add key note</button></div>}{keynotes.length>0&&<div className="keynotes"><h3>Key notes</h3>{keynotes.map(k=><p key={k.id}>{k.text}</p>)}</div>}</aside></div>
+    <div className="live-lower"><section><h2>Live transcript</h2>{transcript.map(x=><p key={x.id}><b>{x.speaker}</b>{x.text}</p>)}</section><section><h2>Moderated discussion</h2>{chat.filter(m=>m.status!=="removed").map(m=><div className={`chat-message ${m.status}`} key={m.id}><p><b>{m.author}</b>{m.text}</p>{m.status==="review"&&<><span>Held for moderator review</span>{role==="host"&&<div><button onClick={()=>moderate(m.id,"approved")}>Approve</button><button onClick={()=>moderate(m.id,"removed")}>Remove</button></div>}</>}</div>)}<div className="chat-compose"><input value={chatDraft} onChange={e=>setChatDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()} placeholder="Ask or contribute..."/><button onClick={sendChat}>Send</button></div></section></div>
+  </div>;
+}
+
 function RelationalLayer({T,projects,docs,setup}){
   const[threads,setThreads]=useState(RELATIONAL_SEED);const[filter,setFilter]=useState("all");const[selected,setSelected]=useState(null);const[compose,setCompose]=useState(false);const[reply,setReply]=useState("");const[draft,setDraft]=useState({anchorType:"question",anchorTitle:"",title:"",body:"",tags:""});
   const[pendingFiles,setPendingFiles]=useState([]);const[attested,setAttested]=useState(false);const[screening,setScreening]=useState(false);
@@ -1917,6 +1975,11 @@ function ConnectTabContent({T,notes,setNotes,deadlines,setDeadlines,addDeadline,
 }
 
 // â”€â”€ PROFILE TAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function StudyPatternGraph({sessions,T}){
+  const days=Array.from({length:14},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(13-i));const date=d.toISOString().slice(0,10);const matches=sessions.filter(s=>s.date===date||String(s.createdAt||"").startsWith(date));return{date,label:d.toLocaleDateString("en",{weekday:"short"}).slice(0,1),q:matches.reduce((a,s)=>a+(s.questions||0),0),b:matches.reduce((a,s)=>a+(s.branches||0),0)};});
+  const max=Math.max(1,...days.map(d=>d.q+d.b));const points=days.map((d,i)=>`${22+i*(656/13)},${128-((d.q+d.b)/max)*92}`).join(" ");const active=days.filter(d=>d.q+d.b>0).length;const totalQ=days.reduce((a,d)=>a+d.q,0);const totalB=days.reduce((a,d)=>a+d.b,0);
+  return <div className="study-pattern-hero"><div className="pattern-heading"><div><span>Your study pattern</span><h2>How your curiosity has moved</h2></div><div><b>{active}</b><small>active days</small></div></div><svg viewBox="0 0 700 165" role="img" aria-label="Questions and follow-up branches over fourteen days"><line x1="22" y1="128" x2="678" y2="128" stroke={T.bd}/><polyline points={points} fill="none" stroke={T.sg} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>{days.map((d,i)=>{const x=22+i*(656/13),y=128-((d.q+d.b)/max)*92;return <g key={d.date}><circle cx={x} cy={y} r={d.q+d.b?4:2} fill={d.q+d.b?T.sg:T.bd}/><text x={x} y="151" textAnchor="middle" fill={T.muted} fontSize="8">{d.label}</text></g>;})}</svg><div className="pattern-legend"><span><i style={{background:T.sg}}/>Questions and branches</span><p>{totalQ===0?"Your pattern will emerge as you ask, annotate, reflect, and join study sessions.":totalB/Math.max(totalQ,1)>.3?"You often stay with a question long enough to branch into deeper thinking.":"Your questions are accumulating. Following one idea with a second question will deepen the network."}</p></div></div>;
+}
 function ProfileTab({T,setup,survey,streak,sessions,notes,tasks,setScreen}){
   const totalQ=sessions.reduce((a,s)=>a+(s.questions||0),0);
   const totalB=sessions.reduce((a,s)=>a+(s.branches||0),0);
@@ -1929,6 +1992,8 @@ function ProfileTab({T,setup,survey,streak,sessions,notes,tasks,setScreen}){
       <div style={{fontFamily:F.display,fontSize:26,fontWeight:480,color:T.ink,letterSpacing:"-0.005em"}}>Profile</div>
       <div style={{fontFamily:F.mono,fontSize:11,color:T.muted,marginTop:2}}>Your learning identity and study pattern</div>
     </div>
+
+    <StudyPatternGraph sessions={sessions} T={T}/>
 
     {/* Identity */}
     <div style={{padding:"16px 18px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:13,marginBottom:16}}>
@@ -1975,12 +2040,6 @@ function ProfileTab({T,setup,survey,streak,sessions,notes,tasks,setScreen}){
       </div>
     </>}
 
-    {/* 14-day pattern */}
-    <div style={{fontFamily:F.mono,fontSize:9,color:T.muted,letterSpacing:"0.1em",marginBottom:10}}>STUDY PATTERN (14 DAYS)</div>
-    <div style={{padding:"14px 16px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:11,marginBottom:18}}>
-      <PatternTracker sessions={sessions} T={T}/>
-    </div>
-
     {/* Actions */}
     <div style={{fontFamily:F.mono,fontSize:9,color:T.muted,letterSpacing:"0.1em",marginBottom:10}}>ACCOUNT</div>
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -1999,32 +2058,30 @@ function ProfileTab({T,setup,survey,streak,sessions,notes,tasks,setScreen}){
 // â”€â”€ FIRST TIME GUIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function FirstTimeGuide({T,onClose,onStartLearn,onStartLab}){
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(22,19,12,0.7)",backdropFilter:"blur(10px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,padding:20}}>
-      <div style={{background:T.card,border:`1px solid ${T.bd}`,borderRadius:18,width:"100%",maxWidth:520,padding:28}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
-          <MycelIcon size={28} color={T.am}/>
-          <div style={{fontSize:20,fontWeight:700,color:T.ink,letterSpacing:"-0.025em"}}>Welcome to Mycel</div>
-        </div>
-        <p style={{fontSize:14,color:T.muted,marginBottom:24,lineHeight:1.65}}>Mycel connects concepts across your units as you learn. The more you ask, the more your knowledge network grows.</p>
-        <div style={{fontFamily:F.mono,fontSize:9,color:T.muted,letterSpacing:"0.1em",marginBottom:12}}>WHAT WOULD YOU LIKE TO DO FIRST?</div>
-        <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:20}}>
+    <div style={{position:"fixed",inset:0,background:"rgba(18,15,10,0.72)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:600,padding:20}}>
+      <div className="welcome-dialog" style={{background:T.card,border:`1px solid ${T.bd}`,borderRadius:10,width:"100%",maxWidth:520,padding:28,boxShadow:T.shadow}}>
+        <Logo T={T} size={22}/>
+        <h2 style={{fontFamily:F.display,fontSize:28,fontWeight:520,color:T.ink,margin:"20px 0 8px",letterSpacing:0}}>Welcome to Mycel</h2>
+        <p style={{fontSize:14,color:T.muted,margin:"0 0 24px",lineHeight:1.65,maxWidth:440}}>Begin with the work already in front of you. Mycel will help you connect questions, sources, and reflections as your understanding grows.</p>
+        <div style={{fontSize:13,fontWeight:700,color:T.ink,marginBottom:10}}>Choose a place to begin</div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
           {[
-            {icon:"ASK",title:"Ask a question from your last lecture",sub:"Start with something you didn't fully understand today",action:onStartLearn,color:T.am},
-            {icon:"LAB",title:"Prepare for an upcoming lab",sub:"Get a mechanism primer before you walk in",action:onStartLab,color:T.sg},
-            {icon:"READ",title:"Upload notes to annotate and ask about",sub:"Paste lecture notes or a reading passage",action:onClose,color:T.oc},
+            {title:"Ask a question from your last lecture",sub:"Start with something you didn't fully understand today",action:onStartLearn,color:T.am},
+            {title:"Prepare for an upcoming lab",sub:"Get a mechanism primer before you walk in",action:onStartLab,color:T.sg},
+            {title:"Upload notes to annotate and ask about",sub:"Paste lecture notes or a reading passage",action:onClose,color:T.oc},
           ].map(o=>(
-            <button key={o.icon} onClick={o.action} style={{display:"flex",alignItems:"flex-start",gap:12,padding:"12px 14px",background:T.raised,border:`1px solid ${T.bd}`,borderRadius:11,cursor:"pointer",textAlign:"left",transition:"all 0.1s"}}
+            <button key={o.title} onClick={o.action} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,padding:"13px 14px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:7,cursor:"pointer",textAlign:"left",transition:"background 0.1s,border-color 0.1s"}}
               onMouseEnter={e=>e.currentTarget.style.borderColor=T.amBd} onMouseLeave={e=>e.currentTarget.style.borderColor=T.bd}>
-              <span style={{fontSize:18,flexShrink:0,marginTop:1}}>{o.icon}</span>
               <div>
                 <div style={{fontSize:13.5,fontWeight:600,color:T.ink,marginBottom:3}}>{o.title}</div>
                 <div style={{fontSize:12,color:T.muted,lineHeight:1.4}}>{o.sub}</div>
               </div>
+              <span aria-hidden="true" style={{color:T.muted,fontSize:16}}>→</span>
             </button>
           ))}
         </div>
         <button onClick={onClose} style={{width:"100%",padding:"10px",background:"none",border:`1px solid ${T.bd}`,borderRadius:9,fontSize:13,color:T.muted,cursor:"pointer",fontFamily:F.ui}}>
-          Skip -- I'll explore on my own
+          Explore on my own
         </button>
       </div>
     </div>
@@ -2058,6 +2115,14 @@ function KnowledgeNetwork({graph,T,F,setup,onExplore}){
         Every concept you explore in Learn becomes a node. Concepts that appear together grow threads between them. Ask Mycel something to plant the first node.
       </div>
     </div>
+  );
+  if(nodes.length===1)return(
+    <div style={{height,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,textAlign:"center"}}>
+      <div style={{width:28,height:28,borderRadius:"50%",background:T.goldBg,border:`1px solid ${T.gold}`,boxShadow:`0 0 0 7px ${T.goldBg}`}}/>
+      <div style={{fontSize:11,color:T.body,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={nodes[0].label}>{nodes[0].label}</div>
+      <div style={{fontSize:9,color:T.faint}}>Your first connection point</div>
+    </div>
+
   );
 
   const {w,h}=dims;
@@ -2175,13 +2240,14 @@ function LiveNetwork({nodes,T,width=174,height=148}){
   const mx=Math.max(...nodes.map(x=>x.w),1);
   const cx=width/2;const cy=height/2;
   return(
-    <svg width={width} height={height} style={{overflow:"visible"}}>
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Knowledge network" style={{overflow:"hidden",display:"block",maxWidth:"100%"}}>
       {nodes.slice(0,10).map((n,i,arr)=>{
         const a=(i/arr.length)*2*Math.PI-Math.PI/2;
         const r=54;
-        const d=n.w===mx?0:r*(0.4+0.6*(1-n.w/mx));
-        const x=cx+(n.w===mx?0:Math.cos(a)*d);
-        const y=cy+(n.w===mx?0:Math.sin(a)*d);
+        const isPrimary=i===0;
+        const d=isPrimary?0:r*(0.72+0.28*(1-n.w/mx));
+        const x=cx+(isPrimary?0:Math.cos(a)*d);
+        const y=cy+(isPrimary?0:Math.sin(a)*d);
         const rad=3+(n.w/mx)*5;
         const phase=(i*0.7+tick*0.1)%(2*Math.PI);
         const pulse=1+Math.sin(phase)*0.15;
@@ -2189,23 +2255,12 @@ function LiveNetwork({nodes,T,width=174,height=148}){
         const goldColor=T.gold||T.am;
         return(<g key={n.id}>
           {i>0&&<line x1={cx} y1={cy} x2={x} y2={y}
-            stroke={n.w===mx?`${goldColor}30`:`${netColor}20`}
-            strokeWidth={n.w===mx?1.2:0.6}
-            strokeDasharray={n.w===mx?"none":"3 3"}/>}
-          <circle cx={x} cy={y} r={(rad+5)*pulse} fill={n.w===mx?`${goldColor}08`:`${netColor}06`}/>
-          <circle cx={x} cy={y} r={rad*pulse} fill={n.w===mx?`${goldColor}25`:`${netColor}18`}
-            stroke={n.w===mx?goldColor:netColor} strokeWidth={0.9} style={{transition:"r 0.8s ease"}}/>
+            stroke={`${netColor}20`} strokeWidth={0.6} strokeDasharray="3 3"/>}
+          <circle cx={x} cy={y} r={(rad+5)*pulse} fill={isPrimary?`${goldColor}08`:`${netColor}06`}/>
+          <circle cx={x} cy={y} r={rad*pulse} fill={isPrimary?`${goldColor}25`:`${netColor}18`}
+            stroke={isPrimary?goldColor:netColor} strokeWidth={0.9} style={{transition:"r 0.8s ease"}}/>
           <text x={x} y={y+rad*pulse+9} textAnchor="middle"
-            style={{fontFamily:F.mono,fontSize:7.5,fill:T.muted}}>{n.label.slice(0,10)}</text>
-        </g>);
-      })}
-      {nodes.slice(0,1).map(n=>{
-        const phase=tick*0.08;
-        const pulse=1+Math.sin(phase)*0.2;
-        const goldColor=T.gold||T.am;
-        return(<g key={`center-${n.id}`}>
-          <circle cx={cx} cy={cy} r={7*pulse} fill={`${goldColor}15`}/>
-          <circle cx={cx} cy={cy} r={4*pulse} fill={`${goldColor}35`} stroke={goldColor} strokeWidth={1.2}/>
+            style={{fontFamily:F.ui,fontSize:7.5,fill:T.muted}}>{n.label.slice(0,14)}</text>
         </g>);
       })}
     </svg>
@@ -2256,28 +2311,55 @@ export default function Mycel(){
   const[firstTime,setFirstTime]=useState(false);
   const[newTask,setNewTask]=useState({text:"",description:"",tier:1,due:"",unitCode:"",effort:""});
   const[showNewTask,setShowNewTask]=useState(false);
+  const[showTaskDetails,setShowTaskDetails]=useState(false);
   const[calendarView,setCalendarView]=useState("week");
+  const[commonsView,setCommonsView]=useState("threads");
+  const[dailyPace,setDailyPace]=useState("focus");
+  const[curiosityPrompt,setCuriosityPrompt]=useState("");
+  const[curiosityDraft,setCuriosityDraft]=useState("");
+  const[curiosityTrail,setCuriosityTrail]=useState([]);
+  const[syncStatus,setSyncStatus]=useState({state:window.__mycelUserId?"syncing":"local"});
   const today=new Date().toISOString().slice(0,10);
   const[selDay,setSelDay]=useState(today);
   const endRef=useRef();const inpRef=useRef();
   const T=theme==="light"?L:D;
 
   useEffect(()=>{(async()=>{
-    const h=new Date().getHours();
-    const th=await db.get("mycel_theme");setTheme(th||(h>=7&&h<19?"light":"dark"));
+    const th=await db.get("mycel_theme");setTheme(th||"light");
     const sv=await db.get("mycel_sv7");const s=await db.get("mycel_s7");
     const m=await db.get("mycel_m7");const g=await db.get("mycel_g7");const n=await db.get("mycel_n7");
     const tk=await db.get("mycel_tk7");const d=await db.get("mycel_d7");const st=await db.get("mycel_st7");
-    const sess=await db.get("mycel_sess7");const dc=await db.get("mycel_dc7");const pr=await db.get("mycel_projects");
+    const sess=await db.get("mycel_sess7");const dc=await db.get("mycel_dc7");const pr=await db.get("mycel_projects");const ct=await db.get("mycel_curiosity_trail");const pace=await db.get("mycel_daily_pace");
     if(sv)setSurvey(sv);if(s)setSetup(s);if(m)setMsgs(m);if(g)setGraph(g);if(n)setNotes(n);
-    if(tk)setTasks(tk);if(d)setDeadlines(d);if(st)setStreak(st);if(sess)setSessions(sess);if(dc)setDocs(dc);if(pr)setProjects(pr);
+    if(tk)setTasks(tk);if(d)setDeadlines(d);if(st)setStreak(st);if(sess)setSessions(sess);if(dc)setDocs(dc);if(pr)setProjects(pr);if(ct)setCuriosityTrail(ct);if(pace?.date===today)setDailyPace(pace.pace||"focus");
     if(s&&sv)setScreen("app");else if(sv&&!s)setScreen("onboard");else setScreen("survey");
     setReady(true);
   })();},[]);
 
   useEffect(()=>{if(tab==="learn")endRef.current?.scrollIntoView({behavior:"smooth"});},[msgs,tab]);
+  useEffect(()=>{if(ready&&dailyPace!=="focus"&&!curiosityPrompt)growCuriosity();},[ready,dailyPace]);
+  useEffect(()=>{const receive=e=>setSyncStatus(e.detail||{state:"local"});window.addEventListener("mycel:sync",receive);return()=>window.removeEventListener("mycel:sync",receive);},[]);
   const toggleTheme=async()=>{const t=theme==="light"?"dark":"light";setTheme(t);await db.set("mycel_theme",t);};
   const SP=(mode)=>buildSys(setup?.fields||[],graph,setup?.name,survey,mode||learnMode);
+
+  const curiositySource=()=>{
+    const concept=[...graph].sort((a,b)=>b.w-a.w)[0]?.label;
+    const note=notes[notes.length-1]?.title||notes[notes.length-1]?.text?.split("\n")[0];
+    const project=projects.find(p=>p.status!=="complete")?.name;
+    const source=concept||note||project||setup?.fields?.[0]?.label;
+    return source?String(source).slice(0,80):"something you noticed recently";
+  };
+  const growCuriosity=()=>{
+    const source=curiositySource();const prompts=[
+      `What would become possible if you understood ${source} deeply enough to teach it without notes?`,
+      `Where might ${source} appear outside the context in which you first encountered it?`,
+      `What assumption about ${source} would be most interesting to test rather than accept?`,
+      `If ${source} behaved in the opposite way, what else in the system would have to change?`,
+    ];
+    const previous=curiosityPrompt;setCuriosityPrompt(prompts.find(p=>p!==previous)||prompts[0]);
+  };
+  const choosePace=async pace=>{setDailyPace(pace);await db.set("mycel_daily_pace",{date:today,pace});if(pace!=="focus")growCuriosity();};
+  const keepSpark=async()=>{if(!curiosityDraft.trim())return;const spark={id:`spark_${Date.now()}`,prompt:curiosityPrompt,text:curiosityDraft.trim(),createdAt:new Date().toISOString()};const trail=[spark,...curiosityTrail].slice(0,30);const note={id:`n_${Date.now()}`,title:"Curiosity spark",text:`QUESTION\n${spark.prompt}\n\nMY THOUGHT\n${spark.text}`,template:"curiosity",createdAt:spark.createdAt};const nextNotes=[...notes,note];setCuriosityTrail(trail);setNotes(nextNotes);setCuriosityDraft("");await Promise.all([db.set("mycel_curiosity_trail",trail),db.set("mycel_n7",nextNotes)]);};
 
   // Companion entry point: AI reads recent notes + knowledge graph + quiz gaps,
   // suggests one thing to understand today + one cross-unit connection to explore.
@@ -2472,22 +2554,18 @@ Respond ONLY in this exact JSON:
       <div className="mycel-header" style={{borderBottom:`1px solid ${T.bd}`,padding:"10px 18px",background:T.sf,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,position:"sticky",top:0,zIndex:50}}>
         <Logo T={T} size={20}/>
         <div style={{display:"flex",gap:3,alignItems:"center",flexWrap:"wrap"}} className="hide-mobile">
-          {NAV.map(n=>(<button key={n.id} onClick={()=>setTab(n.id)} style={{background:tab===n.id?T.amBg:"none",border:`1px solid ${tab===n.id?T.amBd:"transparent"}`,borderRadius:8,padding:"7px 14px",fontSize:13,color:tab===n.id?T.am:T.body,cursor:"pointer",fontWeight:tab===n.id?700:500}}>{n.l}</button>))}
+          {NAV.map(n=>(<button key={n.id} onClick={()=>setTab(n.id)} style={{background:"none",border:"none",borderBottom:`1px solid ${tab===n.id?T.am:"transparent"}`,borderRadius:0,padding:"8px 12px 7px",fontSize:13,color:tab===n.id?T.ink:T.muted,cursor:"pointer",fontWeight:tab===n.id?650:450}}>{n.l}</button>))}
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
-          {!AI_ENABLED&&<span className="core-mode-badge" title="AI features are disabled for this deployment">Core mode</span>}
-          {/* Lab mode quick buttons */}
-          <div style={{display:"flex",gap:4}} className="hide-mobile">
-            <button onClick={()=>setLabScreen("prelab")} style={{background:T.sgBg,border:`1px solid ${T.sgBd}`,borderRadius:10,padding:"6px 12px",fontFamily:F.mono,fontSize:9,color:T.sg,cursor:"pointer"}}>Pre-lab</button>
-            <button onClick={()=>setLabScreen("postlab")} style={{background:T.ocBg,border:`1px solid ${T.ocBd}`,borderRadius:10,padding:"6px 12px",fontFamily:F.mono,fontSize:9,color:T.oc,cursor:"pointer"}}>Post-lab</button>
-          </div>
-          <StreakRing streak={streak} T={T} size={36}/>
-          <button onClick={toggleTheme} title="Toggle Theme" style={{background:T.card,border:`1px solid ${T.bd}`,borderRadius:10,padding:"6px 11px",fontFamily:F.mono,fontSize:10,color:T.muted,cursor:"pointer"}}>{theme==="light"?"Dark":"Light"}</button>
-          <div onClick={()=>setMenu(v=>!v)} style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg, ${T.am}, ${T.sg})`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"#FFF",fontSize:13,fontWeight:800,position:"relative",flexShrink:0,boxShadow:T.shadowSoft}}>
+          <div className={`sync-status ${syncStatus.state}`} title={syncStatus.state==="offline"?"Saved on this device. Cloud sync will retry when available.":"Your Mycel workspace save status"}><i/><span>{syncStatus.state==="syncing"?"Saving...":syncStatus.state==="synced"?"Synced":syncStatus.state==="offline"?"Saved offline":"Saved locally"}</span></div>
+          <div onClick={()=>setMenu(v=>!v)} style={{width:32,height:32,borderRadius:"50%",background:T.am,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"#FFF",fontSize:13,fontWeight:700,position:"relative",flexShrink:0}}>
             {(setup?.name||"S")[0].toUpperCase()}
             {menu&&<div style={{position:"absolute",top:36,right:0,background:T.card,border:`1px solid ${T.bd}`,borderRadius:12,padding:6,minWidth:180,boxShadow:"0 16px 48px -12px rgba(20,16,10,0.3)",zIndex:100,textAlign:"left"}}>
               <div style={{padding:"8px 12px",borderBottom:`1px solid ${T.bdS}`}}><div style={{fontSize:13,fontWeight:600,color:T.ink}}>{setup?.name||"Student"}</div><div style={{fontFamily:F.mono,fontSize:9,color:T.muted,marginTop:2}}>{streak} day streak</div></div>
               <div onClick={()=>{setTab("profile");setMenu(false);}} style={{padding:"8px 12px",fontSize:13,color:T.body,cursor:"pointer",borderRadius:8}}>View profile</div>
+              <div onClick={()=>{setLabScreen("prelab");setMenu(false);}} style={{padding:"8px 12px",fontSize:13,color:T.body,cursor:"pointer",borderRadius:8}}>Prepare for a lab</div>
+              <div onClick={()=>{setLabScreen("postlab");setMenu(false);}} style={{padding:"8px 12px",fontSize:13,color:T.body,cursor:"pointer",borderRadius:8}}>Reflect after a lab</div>
+              <div onClick={()=>{toggleTheme();setMenu(false);}} style={{padding:"8px 12px",fontSize:13,color:T.body,cursor:"pointer",borderRadius:8}}>Use {theme==="light"?"dark":"light"} appearance</div>
               <div onClick={()=>{setScreen("survey");setMenu(false);}} style={{padding:"8px 12px",fontSize:13,color:T.body,cursor:"pointer",borderRadius:8}}>Retake survey</div>
               <div onClick={()=>{setScreen("onboard");setMenu(false);}} style={{padding:"8px 12px",fontSize:13,color:T.body,cursor:"pointer",borderRadius:8}}>Change units</div>
               {window.mycelAuth&&<div onClick={async()=>{await window.mycelAuth.signOut();window.location.reload();}} style={{padding:"8px 12px",fontSize:13,color:T.body,cursor:"pointer",borderRadius:8}}>Sign out</div>}
@@ -2504,15 +2582,10 @@ Respond ONLY in this exact JSON:
 
       <div style={{flex:1,display:"flex",overflow:"hidden",height:"calc(100vh - 48px)"}}>
         {/* SIDEBAR */}
-        <div className="hide-mobile mycel-sidebar" style={{width:214,borderRight:`1px solid ${T.bd}`,background:T.sf,overflowY:"auto",flexShrink:0,padding:"16px 14px"}}>
-          <div style={{fontFamily:F.mono,fontSize:9,color:T.faint,letterSpacing:"0.2em",marginBottom:9}}>UNITS</div>
-          {(setup?.fields||[]).map(f=>(<div key={f.id} style={{padding:"7px 0",borderBottom:`1px solid ${T.d2}`}}><div style={{fontFamily:F.mono,fontSize:8,color:T.am,marginBottom:2}}>{f.code}</div><div style={{fontSize:12,color:T.body,lineHeight:1.25}}>{f.label}</div></div>))}
-          <div style={{height:1,background:T.bd,margin:"14px 0"}}/>
-          <div style={{fontFamily:F.mono,fontSize:9,color:T.faint,letterSpacing:"0.2em",marginBottom:8}}>Knowledge Network</div>
-          <LiveNetwork nodes={topNodes} T={T} width={174} height={148}/>
-          <div style={{height:1,background:T.bd,margin:"14px 0"}}/>
-          <div style={{fontFamily:F.mono,fontSize:9,color:T.faint,letterSpacing:"0.2em",marginBottom:8}}>Study Pattern</div>
-          <PatternTracker sessions={sessions} T={T}/>
+        <div className="hide-mobile mycel-sidebar" style={{width:190,borderRight:`1px solid ${T.bdS}`,background:T.sf,overflowY:"auto",flexShrink:0,padding:"22px 16px"}}>
+          <div style={{fontSize:11,color:T.muted,marginBottom:11}}>Your learning</div>
+          {(setup?.fields||[]).map(f=>(<div key={f.id} style={{padding:"7px 0"}}><div style={{fontSize:12,color:T.body,lineHeight:1.35}}>{f.label}</div><div style={{fontSize:9,color:T.faint,marginTop:1}}>{f.code}</div></div>))}
+          <button onClick={()=>{setTab("learn");setLearnSub("network");}} style={{marginTop:18,padding:"8px 0",background:"none",border:"none",borderTop:`1px solid ${T.bdS}`,width:"100%",textAlign:"left",fontSize:11,color:T.muted,cursor:"pointer"}}>View your knowledge network</button>
         </div>
 
         {/* MAIN CONTENT */}
@@ -2525,54 +2598,59 @@ Respond ONLY in this exact JSON:
             {selDay===today&&(()=>{
               const hr=new Date().getHours();
               const greet=hr<12?"Good morning":hr<18?"Good afternoon":"Good evening";
-              const prompt=hr<12?"What do you want to understand today?":hr<18?"What are you working through right now?":"What clicked for you today?";
+              const prompt=dailyPace==="curious"?"Let’s keep one idea alive.":dailyPace==="gentle"?"Nothing has to be finished today.":hr<12?"What do you want to understand today?":hr<18?"What are you working through right now?":"What clicked for you today?";
               return(
                 <div style={{marginBottom:24,animation:"fadeUp 0.5s ease"}}>
-                  <div style={{fontFamily:F.mono,fontSize:10,color:T.am,letterSpacing:"0.14em",marginBottom:6}}>{greet.toUpperCase()}{setup?.name?", "+setup.name.toUpperCase():""}</div>
-                  <div style={{fontFamily:F.display,fontSize:36,fontWeight:470,color:T.ink,letterSpacing:"0",lineHeight:1.08,marginBottom:18,maxWidth:640}}>{prompt}</div>
+                  <div style={{fontSize:12,color:T.muted,marginBottom:7}}>{greet}{setup?.name?", "+setup.name:""}</div>
+                  <div style={{fontFamily:F.display,fontSize:32,fontWeight:470,color:T.ink,letterSpacing:"0",lineHeight:1.16,marginBottom:18,maxWidth:640}}>{prompt}</div>
 
-                  {!dailyFocus&&!focusBusy&&(
+                  <div className="daily-pace" role="group" aria-label="Choose today's pace">
+                    {[{id:"focus",label:"Ready to focus"},{id:"curious",label:"Keep curiosity alive"},{id:"gentle",label:"Take it gently"}].map(p=><button key={p.id} aria-pressed={dailyPace===p.id} className={dailyPace===p.id?"active":""} onClick={()=>choosePace(p.id)}>{p.label}</button>)}
+                  </div>
+
+                  {dailyPace!=="focus"&&<section className={`curiosity-companion ${dailyPace}`}>
+                    <div className="curiosity-copy">
+                      <span>{dailyPace==="gentle"?"A thought to carry":"A five-minute wondering"}</span>
+                      <h2>{curiosityPrompt||"What have you noticed lately that deserves a second look?"}</h2>
+                      <p>{dailyPace==="gentle"?"You do not need an answer. A sentence, doubt, or observation is enough.":"Follow the question for a few minutes. It does not need to become a task or an outcome."}</p>
+                    </div>
+                    <textarea value={curiosityDraft} onChange={e=>setCuriosityDraft(e.target.value)} rows={3} placeholder="A fragment of thought is welcome..."/>
+                    <div className="curiosity-actions"><button onClick={growCuriosity}>Another question</button><button className="keep" onClick={keepSpark} disabled={!curiosityDraft.trim()}>Keep this thought</button></div>
+                    {curiosityTrail[0]&&<div className="last-spark"><span>Last time, you wondered</span><p>{curiosityTrail[0].text}</p></div>}
+                  </section>}
+
+                  {dailyPace==="focus"&&!dailyFocus&&!focusBusy&&(
                     <button onClick={genDailyFocus}
                       className="mycel-hero-thread"
-                      style={{background:`linear-gradient(135deg, ${T.amBg}, ${T.card})`,border:`1px solid ${T.amBd}`,borderRadius:18,
-                        padding:"20px 22px",width:"100%",textAlign:"left",cursor:"pointer",display:"flex",
-                        alignItems:"center",justifyContent:"space-between",gap:12,boxShadow:T.shadow}}>
+                      style={{background:T.card,border:`1px solid ${T.bd}`,borderRadius:8,
+                        padding:"16px 18px",width:"100%",textAlign:"left",cursor:"pointer",display:"flex",
+                        alignItems:"center",justifyContent:"space-between",gap:12,boxShadow:"none"}}>
                       <div>
-                        <div style={{fontSize:15.5,fontWeight:800,color:T.am,marginBottom:4}}>Show Me Where to Focus Today</div>
+                        <div style={{fontSize:14,fontWeight:650,color:T.ink,marginBottom:4}}>Find a useful place to begin</div>
                         <div style={{fontSize:13,color:T.muted,lineHeight:1.5}}>Mycel reads your notes and finds a connection worth exploring.</div>
                       </div>
                       <span style={{fontSize:18,color:T.am,flexShrink:0,fontFamily:F.mono}}>Go</span>
                     </button>
                   )}
 
-                  {focusBusy&&(
+                  {dailyPace==="focus"&&focusBusy&&(
                     <div style={{padding:"24px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:12,textAlign:"center"}}>
                       <div style={{fontFamily:F.mono,fontSize:11,color:T.muted,marginBottom:12}}>Reading your knowledge network...</div>
                       <div style={{display:"flex",gap:6,justifyContent:"center"}}>{[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:T.am,animation:`pulse 1.2s ease ${i*0.2}s infinite`}}/>)}</div>
                     </div>
                   )}
 
-                  {dailyFocus&&(
+                  {dailyPace==="focus"&&dailyFocus&&(
                     <div style={{animation:"growIn 0.4s ease"}}>
                       {/* Cross-unit connection -- THE HERO. This is Mycel's identity. */}
                       {dailyFocus.connection&&(
-                        <div className="mycel-hero-thread" style={{padding:"24px 26px",background:`linear-gradient(135deg, ${(T.nwm||T.oc)}14, ${(T.gold||T.am)}10)`,
-                          border:`1px solid ${(T.nwm||T.oc)}40`,borderRadius:20,marginBottom:12,
-                          position:"relative",overflow:"hidden",boxShadow:T.shadow}}>
-                          {/* mycelium thread motif -- two nodes connected by living threads */}
-                          <svg width="100%" height="100%" viewBox="0 0 400 200" preserveAspectRatio="none" style={{position:"absolute",inset:0,opacity:0.10,pointerEvents:"none"}}>
-                            <path d="M40,40 C140,60 180,120 360,150" stroke={T.nwm||T.oc} strokeWidth="1.2" fill="none"/>
-                            <path d="M40,40 C120,90 200,80 360,150" stroke={T.nwm||T.oc} strokeWidth="0.8" fill="none"/>
-                            <path d="M120,180 C180,120 220,90 320,30" stroke={T.nwm||T.oc} strokeWidth="0.8" fill="none"/>
-                            <circle cx="40" cy="40" r="5" fill={T.nwm||T.oc}/>
-                            <circle cx="360" cy="150" r="5" fill={T.nwm||T.oc}/>
-                            <circle cx="320" cy="30" r="3" fill={T.nwm||T.oc}/>
-                            <circle cx="120" cy="180" r="3" fill={T.nwm||T.oc}/>
-                          </svg>
+                        <div className="mycel-hero-thread" style={{padding:"20px 0",background:"transparent",
+                          borderTop:`1px solid ${T.bd}`,borderBottom:`1px solid ${T.bd}`,borderLeft:0,borderRight:0,borderRadius:0,marginBottom:12,
+                          position:"relative",overflow:"hidden",boxShadow:"none"}}>
                           <div style={{position:"relative"}}>
                             <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
                               <span style={{width:7,height:7,borderRadius:"50%",background:T.nwm||T.oc,display:"inline-block"}}/>
-                              <div style={{fontFamily:F.mono,fontSize:9,color:T.nwm||T.oc,letterSpacing:"0.1em"}}>A CONNECTION YOU MAY NOT HAVE NOTICED</div>
+                              <div style={{fontSize:11,color:T.nwm||T.oc,fontWeight:650}}>A connection worth exploring</div>
                             </div>
                             <p style={{margin:"0 0 10px",fontFamily:F.display,fontSize:23,color:T.ink,lineHeight:1.28}}>{dailyFocus.connection}</p>
                             {dailyFocus.why&&<p style={{margin:"0 0 16px",fontSize:13,color:T.muted,lineHeight:1.65}}>{dailyFocus.why}</p>}
@@ -2584,10 +2662,10 @@ Respond ONLY in this exact JSON:
                       )}
                       {/* Understand today -- supporting */}
                       <div className="mycel-card" style={{padding:"17px 19px",background:T.card,border:`1px solid ${T.bd}`,
-                        borderLeft:`3px solid ${T.am}`,borderRadius:16,marginBottom:12,boxShadow:T.shadowSoft}}>
+                          borderLeft:`2px solid ${T.am}`,borderRadius:8,marginBottom:12,boxShadow:"none"}}>
                         <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}>
                           <span style={{width:7,height:7,borderRadius:"50%",background:T.am,display:"inline-block"}}/>
-                          <div style={{fontFamily:F.mono,fontSize:9,color:T.am,letterSpacing:"0.1em"}}>UNDERSTAND TODAY</div>
+                          <div style={{fontSize:11,color:T.am,fontWeight:650}}>Understand today</div>
                         </div>
                         <p style={{margin:"0 0 12px",fontSize:14.5,color:T.ink,lineHeight:1.6}}>{dailyFocus.understand}</p>
                         <button onClick={()=>{setTab("learn");setLearnSub("chat");}}
@@ -2604,27 +2682,20 @@ Respond ONLY in this exact JSON:
 
             {/* â”€â”€ SCHEDULE (secondary) â”€â”€ */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div><div style={{fontSize:16,fontWeight:700,color:T.ink,letterSpacing:"-0.02em"}}>{selDay===today?"Your day":"Tasks . "+selDay}</div><div style={{fontFamily:F.mono,fontSize:11,color:T.muted,marginTop:2}}>{new Date(selDay+"T12:00:00").toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"})}</div></div>
-              <div style={{display:"flex",gap:7,alignItems:"center"}}><button onClick={()=>setCalendarView(v=>v==="week"?"month":"week")} style={{background:T.card,border:`1px solid ${T.bd}`,borderRadius:9,padding:"8px 12px",color:T.body,fontSize:12,cursor:"pointer"}}>{calendarView==="week"?"Month view":"Week view"}</button><StreakRing streak={streak} T={T} size={44}/><button onClick={()=>setShowNewTask(v=>!v)} style={{background:T.am,border:"none",borderRadius:10,padding:"8px 16px",color:"#FFF",fontSize:13,fontWeight:600,cursor:"pointer"}}>+ Task</button></div>
+              <div><div style={{fontSize:16,fontWeight:700,color:T.ink,letterSpacing:"-0.02em"}}>{selDay===today?"Your day":"Tasks for "+selDay}</div><div style={{fontFamily:F.mono,fontSize:11,color:T.muted,marginTop:2}}>{new Date(selDay+"T12:00:00").toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"})}</div></div>
+              <div style={{display:"flex",gap:7,alignItems:"center"}}><button onClick={()=>setCalendarView(v=>v==="week"?"month":"week")} style={{background:"transparent",border:`1px solid ${T.bd}`,borderRadius:7,padding:"8px 12px",color:T.body,fontSize:12,cursor:"pointer"}}>{calendarView==="week"?"Month view":"Week view"}</button><button onClick={()=>setShowNewTask(v=>!v)} style={{background:T.am,border:"none",borderRadius:7,padding:"8px 14px",color:"#FFF",fontSize:12,fontWeight:600,cursor:"pointer"}}>Add task</button></div>
             </div>
             {calendarView==="week"?<CalStrip tasks={tasks} deadlines={deadlines} today={today} selDay={selDay} onSel={setSelDay} T={T}/>:<MonthCalendar tasks={tasks} deadlines={deadlines} selDay={selDay} onSel={setSelDay} T={T}/>} 
-            {showNewTask&&<div style={{margin:"14px 0",padding:"14px 16px",background:T.card,border:`1px solid ${T.bd}`,borderRadius:12}}>
-              <div style={{fontFamily:F.mono,fontSize:9,color:T.muted,marginBottom:10}}>NEW TASK</div>
-              <input value={newTask.text} onChange={e=>setNewTask(p=>({...p,text:e.target.value}))} placeholder="Task description..." style={{width:"100%",padding:"9px 12px",background:T.sf,border:`1px solid ${T.bd}`,borderRadius:9,color:T.ink,fontSize:14,outline:"none",marginBottom:10,boxSizing:"border-box"}}/>
-              <textarea value={newTask.description} onChange={e=>setNewTask(p=>({...p,description:e.target.value}))} placeholder="More context, success criteria, or dependencies..." rows={2} style={{width:"100%",padding:"9px 12px",background:T.sf,border:`1px solid ${T.bd}`,borderRadius:7,color:T.ink,fontSize:12,outline:"none",resize:"vertical",marginBottom:8}}/>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <select value={newTask.tier} onChange={e=>setNewTask(p=>({...p,tier:+e.target.value}))} style={{padding:"8px 12px",background:T.sf,border:`1px solid ${T.bd}`,borderRadius:9,color:T.ink,fontSize:13,outline:"none",cursor:"pointer"}}><option value={1}>T1 . core</option><option value={2}>T2 . applied</option><option value={3}>T3 . extended</option></select>
-                <input value={newTask.unitCode} onChange={e=>setNewTask(p=>({...p,unitCode:e.target.value}))} placeholder="Unit code" style={{width:110,padding:"8px 12px",background:T.sf,border:`1px solid ${T.bd}`,borderRadius:9,color:T.ink,fontSize:13,outline:"none"}}/>
-                <input value={newTask.due} onChange={e=>setNewTask(p=>({...p,due:e.target.value}))} type="date" style={{padding:"8px 12px",background:T.sf,border:`1px solid ${T.bd}`,borderRadius:9,color:T.ink,fontSize:13,outline:"none"}}/>
-                <input value={newTask.effort} onChange={e=>setNewTask(p=>({...p,effort:e.target.value}))} placeholder="Effort, e.g. 45 min" style={{width:140,padding:"8px 12px",background:T.sf,border:`1px solid ${T.bd}`,borderRadius:9,color:T.ink,fontSize:13,outline:"none"}}/>
-                <button onClick={addTask} style={{background:T.am,border:"none",borderRadius:9,padding:"8px 16px",color:"#FFF",fontSize:13,fontWeight:600,cursor:"pointer"}}>Add</button>
-              </div>
+            {showNewTask&&<div className="quick-task-compose">
+              <div className="quick-task-main"><input autoFocus value={newTask.text} onChange={e=>setNewTask(p=>({...p,text:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&newTask.text.trim()&&addTask()} placeholder="What needs your attention?"/><input aria-label="Due date" value={newTask.due} onChange={e=>setNewTask(p=>({...p,due:e.target.value}))} type="date"/><button onClick={addTask} disabled={!newTask.text.trim()}>Add task</button></div>
+              <button className="task-details-toggle" onClick={()=>setShowTaskDetails(v=>!v)}>{showTaskDetails?"Fewer details":"Add details"}</button>
+              {showTaskDetails&&<div className="quick-task-details"><textarea value={newTask.description} onChange={e=>setNewTask(p=>({...p,description:e.target.value}))} placeholder="Context, a useful definition of done, or dependencies" rows={2}/><select value={newTask.tier} onChange={e=>setNewTask(p=>({...p,tier:+e.target.value}))}><option value={1}>Core priority</option><option value={2}>Applied work</option><option value={3}>Extended exploration</option></select><input value={newTask.unitCode} onChange={e=>setNewTask(p=>({...p,unitCode:e.target.value}))} placeholder="Unit or project"/><input value={newTask.effort} onChange={e=>setNewTask(p=>({...p,effort:e.target.value}))} placeholder="Estimated time"/></div>}
             </div>}
             {todayTasks.length===0?<div className="empty-state" style={{fontSize:14,color:T.muted}}>No tasks yet. Add one tiny next step when you know what needs moving.</div>:(
-              [1,2,3].map(tier=>{const ts=todayTasks.filter(t=>t.tier===tier);if(!ts.length)return null;const color=tc(T,tier);return(<div key={tier}><div style={{fontFamily:F.mono,fontSize:9,color,letterSpacing:"0.15em",margin:"16px 0 8px"}}>{tl(tier).toUpperCase()}</div>{ts.map(t=><TaskCard key={t.id} task={t} onToggle={toggleTask} T={T}/>)}</div>);})
+              [1,2,3].map(tier=>{const ts=todayTasks.filter(t=>t.tier===tier);if(!ts.length)return null;const color=tc(T,tier);return(<div key={tier}><div style={{fontSize:11,color,margin:"16px 0 8px"}}>{tl(tier)}</div>{ts.map(t=><TaskCard key={t.id} task={t} onToggle={toggleTask} T={T}/>)}</div>);})
             )}
             {deadlines.length>0&&selDay===today&&<div style={{marginTop:20}}>
-              <div style={{fontFamily:F.mono,fontSize:9,color:T.ru,letterSpacing:"0.15em",marginBottom:10}}>UPCOMING DEADLINES</div>
+              <div style={{fontSize:11,color:T.ru,marginBottom:10}}>Upcoming deadlines</div>
               {deadlines.sort((a,b)=>a.due.localeCompare(b.due)).slice(0,4).map(d=>(<div key={d.id} style={{padding:"9px 12px",background:T.card,border:`1px solid ${T.ruBd}`,borderRadius:9,marginBottom:7,display:"flex",alignItems:"center",gap:10}}><div style={{width:6,height:6,borderRadius:"50%",background:T.ru,flexShrink:0}}/><div style={{flex:1}}><div style={{fontSize:13,fontWeight:500,color:T.ink}}>{d.title}</div>{d.unitCode&&<div style={{fontFamily:F.mono,fontSize:9,color:T.muted}}>{d.unitCode}</div>}</div><div style={{fontFamily:F.mono,fontSize:11,color:T.ru}}>{d.due}</div></div>))}
             </div>}
           </div>)}
@@ -2871,7 +2942,8 @@ Respond ONLY in this exact JSON:
           </div>}
 
           {tab==="commons"&&<div style={{flex:1,overflowY:"auto",padding:"24px 22px 40px",maxWidth:900,width:"100%",margin:"0 auto",alignSelf:"stretch"}}>
-            <RelationalLayer T={T} projects={projects} docs={docs} setup={setup}/>
+            <div className="space-tabs"><button className={commonsView==="threads"?"active":""} onClick={()=>setCommonsView("threads")}>Threads</button><button className={commonsView==="live"?"active":""} onClick={()=>setCommonsView("live")}>Live Study</button></div>
+            {commonsView==="threads"?<RelationalLayer T={T} projects={projects} docs={docs} setup={setup}/>:<LiveStudySpace T={T} sessions={sessions} setSessions={setSessions}/>} 
           </div>}
 
           {/* PROFILE TAB */}
